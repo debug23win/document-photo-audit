@@ -1,0 +1,17 @@
+*.exe
+*.zip
+*.xlsx
+*.xls
+*.jpg
+*.jpeg
+*.png
+*.pdf
+*.json
+*.html
+dist/
+work/
+reports/
+.ocr-work/
+.update-backup-*/
+!tests/fixtures/Анна.xlsx
+!tests/fixtures/Борис.xlsx
