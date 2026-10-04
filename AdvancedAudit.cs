@@ -23,6 +23,7 @@ namespace PhotoAudit {
     public sealed class SealCheck { public string Status; public double Score,X,Y,Radius; }
     public sealed class Pixels {
         public readonly int Width,Height; public readonly byte[] Data;
+        public Pixels(int width,int height){Width=width;Height=height;Data=new byte[checked(width*height*3)];}
         public Pixels(Bitmap bitmap) {
             Width=bitmap.Width;Height=bitmap.Height;Data=new byte[Width*Height*3];
             using(var b=new Bitmap(Width,Height,PixelFormat.Format24bppRgb)) {
@@ -88,13 +89,13 @@ namespace PhotoAudit {
         static double[] Fit(double[] x,double[] y){double xm=x.Average(),ym=y.Average(),den=x.Sum(a=>(a-xm)*(a-xm));double slope=den==0?0:x.Select((a,i)=>(a-xm)*(y[i]-ym)).Sum()/den;return new[]{ym-slope*xm,slope};}
         public static Bitmap Warp(Bitmap src,PointF[] q) {
             var p=new Pixels(src);int w=(int)Math.Max(Distance(q[0],q[1]),Distance(q[3],q[2])),h=(int)Math.Max(Distance(q[0],q[3]),Distance(q[1],q[2]));
-            w=Math.Max(1,w);h=Math.Max(1,h);var b=new Bitmap(w,h);var output=new Pixels(b);
+            w=Math.Max(1,w);h=Math.Max(1,h);var output=new Pixels(w,h);
             double dx1=q[1].X-q[2].X,dx2=q[3].X-q[2].X,dx3=q[0].X-q[1].X+q[2].X-q[3].X,dy1=q[1].Y-q[2].Y,dy2=q[3].Y-q[2].Y,dy3=q[0].Y-q[1].Y+q[2].Y-q[3].Y;
             double den=dx1*dy2-dx2*dy1,g=0,j=0;if(Math.Abs(den)>.0001){g=(dx3*dy2-dx2*dy3)/den;j=(dx1*dy3-dx3*dy1)/den;}
             double a=q[1].X-q[0].X+g*q[1].X,c=q[3].X-q[0].X+j*q[3].X,d=q[1].Y-q[0].Y+g*q[1].Y,e=q[3].Y-q[0].Y+j*q[3].Y;
             for(int y=0;y<h;y++)for(int x=0;x<w;x++){double u=x/(double)Math.Max(1,w-1),v=y/(double)Math.Max(1,h-1),z=g*u+j*v+1;double sx=(a*u+c*v+q[0].X)/z,sy=(d*u+e*v+q[0].Y)/z;int ix=Math.Max(0,Math.Min(p.Width-2,(int)sx)),iy=Math.Max(0,Math.Min(p.Height-2,(int)sy));double fx=Math.Max(0,Math.Min(1,sx-ix)),fy=Math.Max(0,Math.Min(1,sy-iy));int i=(y*w+x)*3;
                 for(int k=0;k<3;k++)output.Data[i+k]=(byte)((1-fy)*((1-fx)*p.Data[(iy*p.Width+ix)*3+k]+fx*p.Data[(iy*p.Width+ix+1)*3+k])+fy*((1-fx)*p.Data[((iy+1)*p.Width+ix)*3+k]+fx*p.Data[((iy+1)*p.Width+ix+1)*3+k]));}
-            b.Dispose();return output.Bitmap();
+            return output.Bitmap();
         }
         static double Distance(PointF a,PointF b){return Math.Sqrt((a.X-b.X)*(a.X-b.X)+(a.Y-b.Y)*(a.Y-b.Y));}
         public static List<CropRequest> Crops(Photo p,string folder) {

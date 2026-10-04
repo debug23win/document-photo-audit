@@ -38,7 +38,8 @@ namespace PhotoAudit {
     }
     public static class AuditEngine {
         static readonly CultureInfo Inv=CultureInfo.InvariantCulture;
-        static readonly JavaScriptSerializer Json=new JavaScriptSerializer {MaxJsonLength=50000000};
+        [ThreadStatic]static JavaScriptSerializer localJson;
+        static JavaScriptSerializer Json {get{return localJson??(localJson=new JavaScriptSerializer{MaxJsonLength=50000000});}}
         static string N(string s){return Regex.Replace((s??"").ToUpperInvariant().Replace('Ё','Е').Replace('–','-').Replace('—','-'),@"\s+"," ").Trim();}
         static string Compact(string s){return Regex.Replace(N(s),@"\s+","").Replace("ИЛ0","ИЛО").Replace("ИЛO","ИЛО");}
         static string BookClean(string s){s=Regex.Replace(N(s),@"^КНИГА\s*\d+[.,]?\s*","");return Regex.Replace(s,@"[^А-ЯA-Z0-9]","");}
@@ -151,9 +152,9 @@ namespace PhotoAudit {
         static int Distance(string a,string b){int[] prev=Enumerable.Range(0,b.Length+1).ToArray();for(int i=1;i<=a.Length;i++){int[] cur=new int[b.Length+1];cur[0]=i;for(int j=1;j<=b.Length;j++)cur[j]=Math.Min(Math.Min(cur[j-1]+1,prev[j]+1),prev[j-1]+(a[i-1]==b[j-1]?0:1));prev=cur;}return prev[b.Length];}
         static bool Different(string a,string b){a=BookClean(a);b=BookClean(b);if(a.Length<4||b.Length<4)return false;return (double)Distance(a,b)/Math.Max(a.Length,b.Length)>.28;}
         static void Add(AuditResult r,string level,string code,string topic,string detail,params Photo[] photos){var f=new Finding {Level=level,Code=code??"Без шифра",Topic=topic,Detail=detail};foreach(var p in photos.Where(p=>p!=null))f.Photos.Add(p.Id);r.Findings.Add(f);}
-        public static AuditResult Analyze(List<Photo> photos,string registry,Action<int,string> progress=null,CancellationToken cancel=default(CancellationToken)){
+        public static AuditResult Analyze(List<Photo> photos,string registry,Action<int,string> progress=null,CancellationToken cancel=default(CancellationToken),int workers=1){
             var r=new AuditResult {Images=photos.Count,Photos=photos};
-            int processed=0;foreach(var p in photos){cancel.ThrowIfCancellationRequested();Parse(p);if(p.Kind=="Опись")r.Inventory.AddRange(ParseInventory(p));processed++;if(progress!=null)progress(89+(int)(8.0*processed/Math.Max(1,photos.Count)),"Подписи и печати: "+processed+" / "+photos.Count);}foreach(var entry in r.Inventory)entry.Sections=FormAnalysis.InventorySections(entry.Photo,entry);
+            int processed=0;ParallelWork.For(photos.Count,workers,cancel,i=>{Parse(photos[i]);int n=Interlocked.Increment(ref processed);if(progress!=null)progress(89+(int)(8.0*n/Math.Max(1,photos.Count)),"Подписи и печати: "+n+" / "+photos.Count);});foreach(var p in photos.Where(p=>p.Kind=="Опись"))r.Inventory.AddRange(ParseInventory(p));foreach(var entry in r.Inventory)entry.Sections=FormAnalysis.InventorySections(entry.Photo,entry);
             r.Inventory=r.Inventory.GroupBy(i=>i.Code).Select(g=>g.First()).ToList();r.InventoryPages=photos.Count(p=>p.Kind=="Опись");r.MainTitles=photos.Count(p=>p.Kind=="Титул");r.Iul=photos.Count(p=>p.Kind=="ИУЛ");
             var records=new Dictionary<string,List<SourceRow>>();
             if(!string.IsNullOrWhiteSpace(registry))foreach(var row in XlsxReader.Read(registry,"Все загруженные файлы").Rows){string code=FindCode(XlsxReader.Text(row.Values[2]));if(code==null)continue;if(!records.ContainsKey(code))records[code]=new List<SourceRow>();records[code].Add(row);}
@@ -205,15 +206,6 @@ namespace PhotoAudit {
             r.Findings=r.Findings.GroupBy(f=>f.Code+"|"+f.Topic+"|"+f.Detail).Select(g=>g.First()).ToList();
             return r;
         }
-        static void RunScript(string arguments,Action<string> progress,CancellationToken cancel) {
-            string powershell=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows),"System32","WindowsPowerShell","v1.0","powershell.exe");
-            string script=Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"Recognize.ps1");if(!File.Exists(script))throw new FileNotFoundException("Рядом с программой не найден Recognize.ps1.");
-            var info=new ProcessStartInfo(powershell,"-NoProfile -NonInteractive -ExecutionPolicy Bypass -File \""+script+"\" "+arguments){UseShellExecute=false,CreateNoWindow=true,WindowStyle=ProcessWindowStyle.Hidden,RedirectStandardOutput=true,RedirectStandardError=true,StandardOutputEncoding=Encoding.UTF8,StandardErrorEncoding=Encoding.UTF8};
-            var errors=new StringBuilder();using(var process=Process.Start(info))using(var stop=cancel.Register(()=>{try{if(!process.HasExited)process.Kill();}catch{}})) {
-                process.ErrorDataReceived+=(s,e)=>{if(e.Data!=null)lock(errors)errors.AppendLine(e.Data);};process.BeginErrorReadLine();string line;
-                while((line=process.StandardOutput.ReadLine())!=null){cancel.ThrowIfCancellationRequested();progress(line);}process.WaitForExit();cancel.ThrowIfCancellationRequested();if(process.ExitCode!=0)throw new InvalidOperationException("Ошибка обработки Windows: "+errors);
-            }
-        }
         static string Arg(string value){if(value.Contains("\""))throw new ArgumentException("Недопустимый символ в пути.");return "\""+value+"\"";}
         static bool InputExt(string path){return ImageExt(path)||Path.GetExtension(path).Equals(".pdf",StringComparison.OrdinalIgnoreCase);}
         static OcrPage ReadOcr(string folder,string file){return Json.Deserialize<OcrPage>(File.ReadAllText(Path.Combine(folder,Path.GetFileNameWithoutExtension(file)+".json"),Encoding.UTF8));}
@@ -226,7 +218,12 @@ namespace PhotoAudit {
             }
         }
         static string Field(Photo p,string name){return name=="CRC"?p.CRC:name=="Page"?Convert.ToString(p.Page,Inv):name=="Pages"?Convert.ToString(p.Pages,Inv):Convert.ToString(p.Revision,Inv);}
-        public static AuditResult Run(IList<string> inputs,string registry,string destination,Action<int,string> progress,CancellationToken cancel){
+        public static AuditResult Run(IList<string> inputs,string registry,string destination,Action<int,string> progress,CancellationToken cancel,int requestedWorkers=0){
+            var timing=new RunTiming();timing.Mark("Входные файлы и PDF");
+            int imageWorkers=ParallelWork.Workers(requestedWorkers,512),ocrWorkers=ParallelWork.Workers(requestedWorkers,128),visualWorkers=ParallelWork.Workers(requestedWorkers,96);
+            var publish=progress;var progressGate=new object();int lastProgress=-1;var lastMessage=DateTime.MinValue;
+            progress=(percent,message)=>{lock(progressGate){percent=Math.Max(lastProgress,percent);if(percent!=lastProgress||percent==100||(DateTime.UtcNow-lastMessage).TotalMilliseconds>=150){lastProgress=percent;lastMessage=DateTime.UtcNow;publish(percent,message);}}};
+            progress(0,"Параллельная обработка: изображения — "+imageWorkers+", OCR — "+ocrWorkers+", подписи и печати — "+visualWorkers+". Ограничения учитывают доступную память.");
             string root=Path.GetFullPath(destination);Directory.CreateDirectory(root);string work=Path.Combine(root,".ocr-work");Directory.CreateDirectory(work);
             string candidates=Path.Combine(work,"images"),jsons=Path.Combine(work,"json"),large=Path.Combine(work,"large"),largeJson=Path.Combine(work,"large-json"),crops=Path.Combine(work,"crops"),cropJson=Path.Combine(work,"crop-json");
             foreach(var dir in new[]{candidates,jsons,large,largeJson,crops,cropJson})Directory.CreateDirectory(dir);
@@ -242,35 +239,37 @@ namespace PhotoAudit {
             var sources=new List<Tuple<string,string>>();
             foreach(var file in files){cancel.ThrowIfCancellationRequested();if(Path.GetExtension(file.Item1).Equals(".pdf",StringComparison.OrdinalIgnoreCase)){
                 string pages=Path.Combine(work,"pdf-"+sources.Count);Directory.CreateDirectory(pages);int remaining=1000-sources.Count;if(remaining<=0)throw new InvalidOperationException("Одна проверка поддерживает до 1000 страниц / изображений.");
-                RunScript("-PdfInput "+Arg(file.Item1)+" -OutputDirectory "+Arg(pages)+" -MaxPages "+remaining,s=>progress(1,"PDF "+file.Item2+": "+s),cancel);
+                NativeWindows.RenderPdf(file.Item1,pages,remaining,imageWorkers,s=>progress(1,"PDF "+file.Item2+": "+s),cancel);
                 int page=0;foreach(var image in Directory.EnumerateFiles(pages,"*.png").OrderBy(f=>f,StringComparer.Ordinal)){page++;sources.Add(Tuple.Create(image,file.Item2+" / стр. "+page));}
             }else sources.Add(file);if(sources.Count>1000)throw new InvalidOperationException("Одна проверка поддерживает до 1000 страниц / изображений.");}
             if(sources.Count==0)throw new InvalidOperationException("В PDF отсутствуют страницы.");
-            for(int i=0;i<sources.Count;i++){cancel.ThrowIfCancellationRequested();if(!useCache||!File.Exists(Path.Combine(candidates,"p"+(i+1).ToString("D4")+"a.jpg")))Prepare(sources[i].Item1,candidates,i+1);progress(2+(int)(8.0*(i+1)/sources.Count),"Подготовлено "+(i+1)+" / "+sources.Count);}
-            int done=0;RunScript("-InputDirectory "+Arg(candidates)+" -OutputDirectory "+Arg(jsons)+(useCache?" -UseCache":""),s=>progress(10+(int)(23.0*++done/(sources.Count*2)),"Первичное OCR: "+s),cancel);
-            var photos=new List<Photo>();var baseline=new Dictionary<int,Dictionary<string,string>>();string assets=Path.Combine(root,"assets");Directory.CreateDirectory(assets);
-            for(int i=0;i<sources.Count;i++){
-                cancel.ThrowIfCancellationRequested();string stem="p"+(i+1).ToString("D4");var pa=ReadOcr(jsons,stem+"a.jpg");var pb=ReadOcr(jsons,stem+"b.jpg");var best=Score(pa)>=Score(pb)?pa:pb;
+            int imageBudget=128;foreach(var source in sources){using(var header=Image.FromFile(source.Item1)){if((long)header.Width*header.Height>45000000)throw new InvalidDataException("Изображение превышает 45 мегапикселей: "+source.Item2);imageBudget=Math.Max(imageBudget,ParallelWork.ImageBudget(header.Width,header.Height));}}
+            imageWorkers=ParallelWork.Workers(requestedWorkers,imageBudget);progress(2,"С учётом размера страниц: изображения — "+imageWorkers+", OCR — "+ocrWorkers+", подписи и печати — "+visualWorkers);
+            timing.Mark("Подготовка изображений");int prepared=0;ParallelWork.For(sources.Count,imageWorkers,cancel,i=>{if(!useCache||!File.Exists(Path.Combine(candidates,"p"+(i+1).ToString("D4")+"a.jpg")))Prepare(sources[i].Item1,candidates,i+1);int n=Interlocked.Increment(ref prepared);progress(2+(int)(8.0*n/sources.Count),"Подготовлено "+n+" / "+sources.Count);});
+            timing.Mark("Первичное OCR");int done=0;NativeWindows.Recognize(candidates,jsons,ocrWorkers,useCache,s=>progress(10+(int)(23.0*Interlocked.Increment(ref done)/(sources.Count*2)),"Первичное OCR: "+s),cancel);
+            timing.Mark("Геометрия страниц");var photoArray=new Photo[sources.Count];var baselineArray=new Dictionary<string,string>[sources.Count];int geometryDone=0;string assets=Path.Combine(root,"assets");Directory.CreateDirectory(assets);
+            ParallelWork.For(sources.Count,imageWorkers,cancel,i=>{
+                string stem="p"+(i+1).ToString("D4");var pa=ReadOcr(jsons,stem+"a.jpg");var pb=ReadOcr(jsons,stem+"b.jpg");var best=Score(pa)>=Score(pb)?pa:pb;
                 string image=Path.Combine(assets,stem+".jpg");File.Copy(Path.Combine(candidates,best.file),image,true);
-                var p=new Photo{Id=i+1,Original=sources[i].Item2,Image=image,Ocr=best};Parse(p,false);p.KindHint=p.Kind;p.CodeHint=p.Code;p.OrganizationHint=p.Organization;baseline[p.Id]=new Dictionary<string,string>();foreach(var f in new[]{"CRC","Page","Pages","Revision"})baseline[p.Id][f]=Field(p,f);
+                var p=new Photo{Id=i+1,Original=sources[i].Item2,Image=image,Ocr=best};Parse(p,false);p.KindHint=p.Kind;p.CodeHint=p.Code;p.OrganizationHint=p.Organization;baselineArray[i]=new Dictionary<string,string>();foreach(var f in new[]{"CRC","Page","Pages","Revision"})baselineArray[i][f]=Field(p,f);
                 p.FullImage=Path.Combine(work,stem+"-full.jpg");
-                if(useCache&&File.Exists(p.FullImage)&&File.Exists(Path.Combine(large,stem+".jpg"))){p.ProcessingNote="Использована подготовленная геометрия того же входного файла";photos.Add(p);continue;}
+                if(useCache&&File.Exists(p.FullImage)&&File.Exists(Path.Combine(large,stem+".jpg"))){p.ProcessingNote="Использована подготовленная геометрия того же входного файла";photoArray[i]=p;int cached=Interlocked.Increment(ref geometryDone);progress(33+(int)(7.0*cached/sources.Count),"Геометрия из кэша: "+cached+" / "+sources.Count);return;}
                 using(var original=AdvancedAudit.Upright(sources[i].Item1,best==pb)) {
                     string note;
                     using(var corrected=AdvancedAudit.Rectify(original,best,out note)){
                         p.FullImage=Path.Combine(work,stem+"-full.jpg");FullJpeg(corrected,p.FullImage);p.ProcessingNote=note;
                         using(var overview=AdvancedAudit.Resize(corrected,3000))Jpeg(overview,Path.Combine(large,stem+".jpg"));
                     }
-                }photos.Add(p);progress(33+(int)(7.0*(i+1)/sources.Count),"Геометрия и исходное разрешение: "+(i+1)+" / "+sources.Count);
-            }
-            done=0;RunScript("-InputDirectory "+Arg(large)+" -OutputDirectory "+Arg(largeJson)+(useCache?" -UseCache":""),s=>progress(40+(int)(15.0*++done/sources.Count),"OCR высокого разрешения: "+s),cancel);
-            var requests=new List<CropRequest>();
-            foreach(var p in photos){cancel.ThrowIfCancellationRequested();string stem="p"+p.Id.ToString("D4");var improved=ReadOcr(largeJson,stem+".jpg");
+                }photoArray[i]=p;int n=Interlocked.Increment(ref geometryDone);progress(33+(int)(7.0*n/sources.Count),"Геометрия и исходное разрешение: "+n+" / "+sources.Count);
+            ParallelWork.RelieveMemory();});var photos=photoArray.ToList();var baseline=photos.ToDictionary(p=>p.Id,p=>baselineArray[p.Id-1]);
+            timing.Mark("OCR высокого разрешения");done=0;NativeWindows.Recognize(large,largeJson,ocrWorkers,useCache,s=>progress(40+(int)(15.0*Interlocked.Increment(ref done)/sources.Count),"OCR высокого разрешения: "+s),cancel);
+            timing.Mark("Увеличение фрагментов");var cropArray=new List<CropRequest>[photos.Count];int cropDone=0;
+            ParallelWork.For(photos.Count,imageWorkers,cancel,i=>{var p=photos[i];string stem="p"+p.Id.ToString("D4");var improved=ReadOcr(largeJson,stem+".jpg");
                 if(Score(improved)>=Score(p.Ocr)*.80){p.Ocr=improved;p.Image=Path.Combine(assets,stem+"-processed.jpg");File.Copy(Path.Combine(large,stem+".jpg"),p.Image,true);}else{using(var original=AdvancedAudit.Upright(sources[p.Id-1].Item1,p.Ocr.file.EndsWith("b.jpg")))FullJpeg(original,p.FullImage);p.ProcessingNote+="; сохранено первичное OCR";}
-                Parse(p,false);requests.AddRange(AdvancedAudit.Crops(p,crops));
-            }
-            done=0;RunScript("-InputDirectory "+Arg(crops)+" -OutputDirectory "+Arg(cropJson),s=>progress(55+(int)(32.0*++done/Math.Max(1,requests.Count)),"Повторное OCR фрагментов: "+s),cancel);
-            foreach(var p in photos){cancel.ThrowIfCancellationRequested();var local=requests.Where(c=>c.Photo==p.Id).ToList();
+                Parse(p,false);cropArray[i]=AdvancedAudit.Crops(p,crops);int n=Interlocked.Increment(ref cropDone);progress(55+(int)(5.0*n/photos.Count),"Увеличенные фрагменты: "+n+" / "+photos.Count);
+            ParallelWork.RelieveMemory();});var requests=cropArray.SelectMany(c=>c).ToList();
+            timing.Mark("Повторное OCR фрагментов");done=0;NativeWindows.Recognize(crops,cropJson,ocrWorkers,false,s=>progress(60+(int)(27.0*Interlocked.Increment(ref done)/Math.Max(1,requests.Count)),"Повторное OCR фрагментов: "+s),cancel);
+            timing.Mark("Объединение чтений");ParallelWork.For(photos.Count,imageWorkers,cancel,i=>{var p=photos[i];var local=cropArray[i];
                 foreach(var field in new[]{"CRC","Page","Pages","Revision"}) {
                     var reads=new List<Tuple<string,string>>{Tuple.Create("whole-2200",baseline[p.Id][field]),Tuple.Create("whole-3000",Field(p,field))};
                     foreach(var req in local.Where(c=>c.Field==(field=="Page"||field=="Pages"?"Footer":field))) {
@@ -297,12 +296,13 @@ namespace PhotoAudit {
                 }
                 foreach(var c in local){File.Copy(Path.Combine(crops,c.File),Path.Combine(assets,c.File),true);File.Delete(Path.Combine(crops,c.File));File.Copy(Path.Combine(cropJson,Path.GetFileNameWithoutExtension(c.File)+".json"),Path.Combine(assets,Path.GetFileNameWithoutExtension(c.File)+".json"),true);}
                 ApplyReadings(p);File.WriteAllText(Path.Combine(assets,"p"+p.Id.ToString("D4")+".json"),Json.Serialize(p.Ocr),new UTF8Encoding(false));
-            }
-            progress(89,"Подписные ячейки, печати и правила документов");var result=Analyze(photos,registry,progress,cancel);
-            foreach(var p in photos){cancel.ThrowIfCancellationRequested();FormAnalysis.SaveSignatureCrops(p,assets);}
+            });
+            timing.Mark("Подписи, печати и правила");progress(89,"Подписные ячейки, печати и правила документов");var result=Analyze(photos,registry,progress,cancel,visualWorkers);
+            timing.Mark("Сохранение отчёта");ParallelWork.For(photos.Count,visualWorkers,cancel,i=>FormAnalysis.SaveSignatureCrops(photos[i],assets));
             SaveResult(result,root,registry);if(File.Exists(Path.Combine(root,"Ошибка.txt")))File.Delete(Path.Combine(root,"Ошибка.txt"));cancel.ThrowIfCancellationRequested();
             if(Path.GetFullPath(work).StartsWith(root+Path.DirectorySeparatorChar,StringComparison.OrdinalIgnoreCase)&&Path.GetFileName(work)==".ocr-work")Directory.Delete(work,true);
-            progress(100,"Готово: "+result.Images+" страниц / изображений, "+result.Findings.Count+" пунктов для просмотра");return result;
+            var stages=timing.Finish();File.WriteAllText(Path.Combine(root,"Время_проверки.json"),Json.Serialize(new {Version="1.2.0",Seconds=timing.Seconds,RequestedWorkers=requestedWorkers,ImageWorkers=imageWorkers,OcrWorkers=ocrWorkers,VisualWorkers=visualWorkers,Stages=stages}),new UTF8Encoding(false));
+            progress(100,"Готово за "+TimeSpan.FromSeconds(timing.Seconds).ToString(@"mm\:ss")+": "+result.Images+" страниц / изображений, "+result.Findings.Count+" пунктов для просмотра");return result;
         }
         public static AuditResult Reanalyze(string root,string registry){
             var prior=(Dictionary<string,object>)Json.DeserializeObject(File.ReadAllText(Path.Combine(root,"Результаты.json"),Encoding.UTF8));

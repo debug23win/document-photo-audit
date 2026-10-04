@@ -13,31 +13,37 @@ namespace PhotoAudit {
     static class AuditProgram {
         [STAThread]static int Main(string[] args){
             Application.EnableVisualStyles();Application.SetCompatibleTextRenderingDefault(false);
+            Application.ThreadException+=(s,e)=>MessageBox.Show("Ошибка сохранена: "+LogError(e.Exception,null)+"\n"+e.Exception.Message,"Автопроверка документов");
             try {
+                int requestedWorkers=0;if(args.Length>=3&&args[0]=="--batch"&&args[1]=="--workers"){requestedWorkers=int.Parse(args[2]);args=new[]{"--batch"}.Concat(args.Skip(3)).ToArray();}
                 if(args.Length>0&&args[0]=="--apply-update")return DesktopUpdates.Updates.Apply(args);
+                if(args.Length>=4&&args[0]=="--render-pdf"){NativeWindows.RenderPdf(args[1],Path.GetFullPath(args[2]),int.Parse(args[3]),ParallelWork.Workers(args.Length>4?int.Parse(args[4]):0,512),s=>Console.WriteLine(s),CancellationToken.None);return 0;}
+                if(args.Length>=3&&args[0]=="--ocr"){NativeWindows.Recognize(args[1],args[2],ParallelWork.Workers(args.Length>3?int.Parse(args[3]):0,192),args.Length>4&&args[4]=="1",s=>Console.WriteLine(s),CancellationToken.None);return 0;}
                 if(args.Length>=4&&args[0]=="--compare"){QualityBenchmark.Compare(args[1],args[2],args[3],args.Length>4?args[4]:null);return 0;}
                 if(args.Length>=3&&args[0]=="--reanalyze"){AuditEngine.Reanalyze(Path.GetFullPath(args[1]),args[2]=="-"?null:args[2]);return 0;}
                 if(args.Length>=4&&args[0]=="--batch"){
                     string dest=Path.GetFullPath(args[1]);Directory.CreateDirectory(dest);
-                    var result=AuditEngine.Run(args.Skip(3).ToList(),args[2]=="-"?null:args[2],dest,(p,s)=>File.WriteAllText(Path.Combine(dest,"Ход_проверки.txt"),p+"% "+s,new UTF8Encoding(false)),CancellationToken.None);return 0;
+                    var result=AuditEngine.Run(args.Skip(3).ToList(),args[2]=="-"?null:args[2],dest,(p,s)=>File.WriteAllText(Path.Combine(dest,"Ход_проверки.txt"),p+"% "+s,new UTF8Encoding(false)),CancellationToken.None,requestedWorkers);return 0;
                 }
                 if(args.Length>=2&&args[0]=="--snapshot")using(var form=new AuditForm()){foreach(var p in args.Skip(2))form.AddFile(p);form.Opacity=0;form.Show();Application.DoEvents();form.PerformLayout();using(var bmp=new Bitmap(form.Width,form.Height)){form.DrawToBitmap(bmp,new Rectangle(0,0,form.Width,form.Height));bmp.Save(args[1]);}return 0;}
                 Application.Run(new AuditForm());return 0;
-            }catch(Exception ex){if(args.Length>1&&args[0]=="--batch")File.WriteAllText(Path.Combine(args[1],"Ошибка.txt"),ex.ToString(),Encoding.UTF8);else MessageBox.Show(ex.Message,"Автопроверка документов",MessageBoxButtons.OK,MessageBoxIcon.Error);return 1;}
+            }catch(Exception ex){string root=args.Length>1&&args[0]=="--batch"?args[1]:args.Length>2&&(args[0]=="--ocr"||args[0]=="--render-pdf")?args[2]:null;string log=LogError(ex,root);if(args.Length==0)MessageBox.Show(ex.Message+"\nЖурнал: "+log,"Автопроверка документов",MessageBoxButtons.OK,MessageBoxIcon.Error);else Console.Error.WriteLine(ex);return 1;}
         }
+        internal static string LogError(Exception ex,string root){try{root=root??AppDomain.CurrentDomain.BaseDirectory;Directory.CreateDirectory(root);string path=Path.Combine(root,"Ошибка.txt");File.WriteAllText(path,ex.ToString(),new UTF8Encoding(true));return path;}catch{return "не удалось записать журнал";}}
     }
     public sealed class AuditForm:Form {
         readonly List<string> inputs=new List<string>();readonly ListBox list=new ListBox();
         readonly TextBox registry=new TextBox(),output=new TextBox();readonly RichTextBox log=new RichTextBox();
         readonly ProgressBar bar=new ProgressBar();readonly Button run=new Button(),cancel=new Button(),open=new Button();
         readonly Label counts=new Label();readonly List<Button> editing=new List<Button>();CancellationTokenSource token;bool busy;string report;
+        readonly ComboBox parallel=new ComboBox{DropDownStyle=ComboBoxStyle.DropDownList,Width=95};
         public AuditForm(){
             Text="Автопроверка документов — изображения и PDF";Font=new Font("Segoe UI",10);ClientSize=new Size(1030,715);MinimumSize=new Size(950,730);StartPosition=FormStartPosition.CenterScreen;BackColor=Color.FromArgb(246,248,250);AllowDrop=true;
             var grid=new TableLayoutPanel{Dock=DockStyle.Fill,Padding=new Padding(24),ColumnCount=1,RowCount=10};Controls.Add(grid);
             float[] fixedRows={44,45,40,0,42,42,60,26,0,50};for(int i=0;i<fixedRows.Length;i++)grid.RowStyles.Add(new RowStyle(fixedRows[i]==0?SizeType.Percent:SizeType.Absolute,fixedRows[i]==0?50:fixedRows[i]));
             var titleBar=new FlowLayoutPanel{Dock=DockStyle.Fill,WrapContents=false};titleBar.Controls.Add(new Label{Text="Автопроверка документов",Font=new Font("Segoe UI",19,FontStyle.Bold),AutoSize=true,ForeColor=Color.FromArgb(28,46,65)});titleBar.Controls.Add(DesktopUpdates.Updates.Attach(this,()=>busy));grid.Controls.Add(titleBar,0,0);
             grid.Controls.Add(new Label{Text="Загрузите опись, титулы и все страницы ИУЛ. Программа распознает текст и покажет возможные расхождения.",Dock=DockStyle.Fill,ForeColor=Color.FromArgb(73,91,108)},0,1);
-            var actions=new FlowLayoutPanel{Dock=DockStyle.Fill,WrapContents=false};actions.Controls.Add(Edit("Добавить фото / PDF / ZIP",215,(s,e)=>Choose()));actions.Controls.Add(Edit("Добавить папку",150,(s,e)=>Folder()));actions.Controls.Add(Edit("Удалить",100,(s,e)=>{foreach(int i in list.SelectedIndices.Cast<int>().OrderByDescending(x=>x).ToList())inputs.RemoveAt(i);RefreshInputs();}));actions.Controls.Add(Edit("Сравнить версии",170,(s,e)=>Benchmark()));grid.Controls.Add(actions,0,2);
+            var actions=new FlowLayoutPanel{Dock=DockStyle.Fill,WrapContents=false};actions.Controls.Add(Edit("Добавить фото / PDF / ZIP",215,(s,e)=>Choose()));actions.Controls.Add(Edit("Добавить папку",150,(s,e)=>Folder()));actions.Controls.Add(Edit("Удалить",100,(s,e)=>{foreach(int i in list.SelectedIndices.Cast<int>().OrderByDescending(x=>x).ToList())inputs.RemoveAt(i);RefreshInputs();}));actions.Controls.Add(Edit("Сравнить версии",170,(s,e)=>Benchmark()));actions.Controls.Add(new Label{Text="Потоки:",AutoSize=true,Padding=new Padding(8,7,0,0)});parallel.Items.AddRange(new object[]{"Авто","1","2","3","4","6","8"});parallel.SelectedIndex=0;parallel.Margin=new Padding(3,3,0,0);actions.Controls.Add(parallel);grid.Controls.Add(actions,0,2);
             list.Dock=DockStyle.Fill;list.SelectionMode=SelectionMode.MultiExtended;list.HorizontalScrollbar=true;grid.Controls.Add(list,0,3);
             grid.Controls.Add(PathRow("Реестр Excel:",registry,(s,e)=>{using(var d=new OpenFileDialog{Filter="Книги Excel|*.xlsx",Title="Реестр для сверки CRC32"})if(d.ShowDialog(this)==DialogResult.OK)registry.Text=d.FileName;}),0,4);
             output.Text=AppDomain.CurrentDomain.BaseDirectory;grid.Controls.Add(PathRow("Папка отчётов:",output,(s,e)=>{using(var d=new FolderBrowserDialog{Description="Папка для нового отчёта и изображений"})if(d.ShowDialog(this)==DialogResult.OK)output.Text=d.SelectedPath;}),0,5);
@@ -67,15 +73,15 @@ namespace PhotoAudit {
         void RefreshInputs(){list.Items.Clear();foreach(var p in inputs)list.Items.Add(p);counts.Text="Выбрано: "+inputs.Count;}
         void Append(string s){log.AppendText("\n"+s);log.SelectionStart=log.TextLength;log.ScrollToCaret();}
         void Ui(Action action){if(!IsDisposed&&IsHandleCreated)BeginInvoke(action);}
-        void SetBusy(bool value){busy=value;run.Enabled=!value;cancel.Enabled=value;open.Enabled=!value&&report!=null;registry.Enabled=!value;output.Enabled=!value;list.Enabled=!value;foreach(var b in editing)b.Enabled=!value;}
+        void SetBusy(bool value){busy=value;run.Enabled=!value;cancel.Enabled=value;open.Enabled=!value&&report!=null;registry.Enabled=!value;output.Enabled=!value;list.Enabled=!value;parallel.Enabled=!value;foreach(var b in editing)b.Enabled=!value;}
         void Start(){
             if(inputs.Count==0){MessageBox.Show(this,"Добавьте фотографии, PDF или ZIP.",Text);return;}
             if(registry.Text!=""&&!File.Exists(registry.Text)){MessageBox.Show(this,"Реестр Excel не найден.",Text);return;}
             string dest;try{dest=Path.Combine(Path.GetFullPath(output.Text),"Проверка_"+DateTime.Now.ToString("yyyyMMdd_HHmmss_fff"));}catch(Exception ex){MessageBox.Show(this,ex.Message,Text);return;}
-            var selected=inputs.ToList();string reference=registry.Text;token=new CancellationTokenSource();SetBusy(true);bar.Value=0;Append("Начата проверка.");
-            var worker=new Thread(()=>{try{var result=AuditEngine.Run(selected,reference,dest,(p,s)=>Ui(()=>{bar.Value=Math.Min(100,p);Append(s);}),token.Token);Ui(()=>{report=result.Report;Append("Отчёт: "+report);counts.Text="Фото: "+result.Images+"; пунктов: "+result.Findings.Count;SetBusy(false);token.Dispose();token=null;});}
+            var selected=inputs.ToList();string reference=registry.Text;int workers=parallel.SelectedIndex==0?0:int.Parse(Convert.ToString(parallel.SelectedItem));token=new CancellationTokenSource();SetBusy(true);bar.Value=0;Append("Начата проверка.");
+            var worker=new Thread(()=>{try{var result=AuditEngine.Run(selected,reference,dest,(p,s)=>Ui(()=>{bar.Value=Math.Min(100,p);Append(s);}),token.Token,workers);Ui(()=>{report=result.Report;Append("Отчёт: "+report);counts.Text="Фото: "+result.Images+"; пунктов: "+result.Findings.Count;SetBusy(false);token.Dispose();token=null;});}
                 catch(OperationCanceledException){Ui(()=>{Append("Проверка отменена. Частичные данные сохранены в папке запуска.");SetBusy(false);token.Dispose();token=null;});}
-                catch(Exception ex){Ui(()=>{Append("Ошибка: "+ex.Message);SetBusy(false);token.Dispose();token=null;MessageBox.Show(this,ex.Message,"Не удалось выполнить проверку",MessageBoxButtons.OK,MessageBoxIcon.Error);});}});worker.IsBackground=true;worker.SetApartmentState(ApartmentState.STA);worker.Start();
+                catch(Exception ex){string errorLog=AuditProgram.LogError(ex,dest);Ui(()=>{Append("Ошибка: "+ex.Message+"\nЖурнал: "+errorLog);SetBusy(false);token.Dispose();token=null;MessageBox.Show(this,ex.Message,"Не удалось выполнить проверку",MessageBoxButtons.OK,MessageBoxIcon.Error);});}});worker.IsBackground=true;worker.SetApartmentState(ApartmentState.STA);worker.Start();
         }
     }
 }

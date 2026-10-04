@@ -22,7 +22,7 @@ jobs:
       - name: Build portable application
         shell: pwsh
         run: |
-          $version = '1.1.0'
+          $version = '1.2.0'
           if ($env:GITHUB_REF -like 'refs/tags/v*') { $version = $env:GITHUB_REF_NAME.TrimStart('v') }
           ./build.ps1 -Version $version
       - name: Test document comparison and update validation
@@ -30,6 +30,7 @@ jobs:
         run: |
           ./tests/test_audit.ps1
           ./tests/test_advanced.ps1
+          ./tests/test_parallel.ps1
           ./tests/test_pdf.ps1
           ./tests/test_updates.ps1
       - name: Publish portable package
@@ -41,7 +42,7 @@ jobs:
           $tag = $env:GITHUB_REF_NAME
           gh release view $tag --repo $env:GITHUB_REPOSITORY 2>$null
           if ($LASTEXITCODE -ne 0) {
-            gh release create $tag --repo $env:GITHUB_REPOSITORY --title $tag --notes 'Portable Windows application with local Windows OCR. See README.'
+            gh release create $tag --repo $env:GITHUB_REPOSITORY --title $tag --notes 'Portable Windows application with parallel local Windows OCR and PDF input. See README.'
             if ($LASTEXITCODE -ne 0) { throw 'Release creation failed' }
           }
           gh release upload $tag dist/document-photo-audit-windows.zip dist/document-photo-audit-windows.zip.sha256 --clobber --repo $env:GITHUB_REPOSITORY
