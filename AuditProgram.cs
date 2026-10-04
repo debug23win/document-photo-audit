@@ -15,6 +15,7 @@ namespace PhotoAudit {
             Application.EnableVisualStyles();Application.SetCompatibleTextRenderingDefault(false);
             try {
                 if(args.Length>0&&args[0]=="--apply-update")return DesktopUpdates.Updates.Apply(args);
+                if(args.Length>=4&&args[0]=="--compare"){QualityBenchmark.Compare(args[1],args[2],args[3],args.Length>4?args[4]:null);return 0;}
                 if(args.Length>=3&&args[0]=="--reanalyze"){AuditEngine.Reanalyze(Path.GetFullPath(args[1]),args[2]=="-"?null:args[2]);return 0;}
                 if(args.Length>=4&&args[0]=="--batch"){
                     string dest=Path.GetFullPath(args[1]);Directory.CreateDirectory(dest);
@@ -31,17 +32,17 @@ namespace PhotoAudit {
         readonly ProgressBar bar=new ProgressBar();readonly Button run=new Button(),cancel=new Button(),open=new Button();
         readonly Label counts=new Label();readonly List<Button> editing=new List<Button>();CancellationTokenSource token;bool busy;string report;
         public AuditForm(){
-            Text="Автопроверка документов по фотографиям";Font=new Font("Segoe UI",10);ClientSize=new Size(1030,715);MinimumSize=new Size(950,730);StartPosition=FormStartPosition.CenterScreen;BackColor=Color.FromArgb(246,248,250);AllowDrop=true;
+            Text="Автопроверка документов — изображения и PDF";Font=new Font("Segoe UI",10);ClientSize=new Size(1030,715);MinimumSize=new Size(950,730);StartPosition=FormStartPosition.CenterScreen;BackColor=Color.FromArgb(246,248,250);AllowDrop=true;
             var grid=new TableLayoutPanel{Dock=DockStyle.Fill,Padding=new Padding(24),ColumnCount=1,RowCount=10};Controls.Add(grid);
             float[] fixedRows={44,45,40,0,42,42,60,26,0,50};for(int i=0;i<fixedRows.Length;i++)grid.RowStyles.Add(new RowStyle(fixedRows[i]==0?SizeType.Percent:SizeType.Absolute,fixedRows[i]==0?50:fixedRows[i]));
             var titleBar=new FlowLayoutPanel{Dock=DockStyle.Fill,WrapContents=false};titleBar.Controls.Add(new Label{Text="Автопроверка документов",Font=new Font("Segoe UI",19,FontStyle.Bold),AutoSize=true,ForeColor=Color.FromArgb(28,46,65)});titleBar.Controls.Add(DesktopUpdates.Updates.Attach(this,()=>busy));grid.Controls.Add(titleBar,0,0);
             grid.Controls.Add(new Label{Text="Загрузите опись, титулы и все страницы ИУЛ. Программа распознает текст и покажет возможные расхождения.",Dock=DockStyle.Fill,ForeColor=Color.FromArgb(73,91,108)},0,1);
-            var actions=new FlowLayoutPanel{Dock=DockStyle.Fill,WrapContents=false};actions.Controls.Add(Edit("Добавить фото / ZIP",185,(s,e)=>Choose()));actions.Controls.Add(Edit("Добавить папку",150,(s,e)=>Folder()));actions.Controls.Add(Edit("Удалить",100,(s,e)=>{foreach(int i in list.SelectedIndices.Cast<int>().OrderByDescending(x=>x).ToList())inputs.RemoveAt(i);RefreshInputs();}));grid.Controls.Add(actions,0,2);
+            var actions=new FlowLayoutPanel{Dock=DockStyle.Fill,WrapContents=false};actions.Controls.Add(Edit("Добавить фото / PDF / ZIP",215,(s,e)=>Choose()));actions.Controls.Add(Edit("Добавить папку",150,(s,e)=>Folder()));actions.Controls.Add(Edit("Удалить",100,(s,e)=>{foreach(int i in list.SelectedIndices.Cast<int>().OrderByDescending(x=>x).ToList())inputs.RemoveAt(i);RefreshInputs();}));actions.Controls.Add(Edit("Сравнить версии",170,(s,e)=>Benchmark()));grid.Controls.Add(actions,0,2);
             list.Dock=DockStyle.Fill;list.SelectionMode=SelectionMode.MultiExtended;list.HorizontalScrollbar=true;grid.Controls.Add(list,0,3);
             grid.Controls.Add(PathRow("Реестр Excel:",registry,(s,e)=>{using(var d=new OpenFileDialog{Filter="Книги Excel|*.xlsx",Title="Реестр для сверки CRC32"})if(d.ShowDialog(this)==DialogResult.OK)registry.Text=d.FileName;}),0,4);
             output.Text=AppDomain.CurrentDomain.BaseDirectory;grid.Controls.Add(PathRow("Папка отчётов:",output,(s,e)=>{using(var d=new FolderBrowserDialog{Description="Папка для нового отчёта и изображений"})if(d.ShowDialog(this)==DialogResult.OK)output.Text=d.SelectedPath;}),0,5);
-            grid.Controls.Add(new Label{Text="Названия, шифры, изменения, CRC32 и фамилии — по распознанному тексту.\nПечати и подписи — предварительный поиск синих отметок с показом снимков.\nРаспознавание выполняется локально средствами Windows; нужен русский компонент OCR.",Dock=DockStyle.Fill,ForeColor=Color.FromArgb(73,91,108)},0,6);
-            bar.Dock=DockStyle.Fill;grid.Controls.Add(bar,0,7);log.Dock=DockStyle.Fill;log.ReadOnly=true;log.BackColor=Color.White;log.Text="Добавьте изображения или ZIP. Реестр Excel нужен для сверки контрольных сумм.\nИсходные файлы сохраняются без изменений. Каждый запуск создаёт отдельную папку отчёта.";grid.Controls.Add(log,0,8);
+            grid.Controls.Add(new Label{Text="Названия, шифры, изменения, CRC32 и фамилии — по распознанному тексту.\nКаждая подписная строка и круглая печать проверяются отдельно; учитываются чёрные штрихи.\nРаспознавание выполняется локально средствами Windows; нужен русский компонент OCR.",Dock=DockStyle.Fill,ForeColor=Color.FromArgb(73,91,108)},0,6);
+            bar.Dock=DockStyle.Fill;grid.Controls.Add(bar,0,7);log.Dock=DockStyle.Fill;log.ReadOnly=true;log.BackColor=Color.White;log.Text="Добавьте изображения, PDF или ZIP. Реестр Excel нужен для сверки контрольных сумм.\nИсходные файлы сохраняются без изменений. Каждый запуск создаёт отдельную папку отчёта.";grid.Controls.Add(log,0,8);
             var bottom=new FlowLayoutPanel{Dock=DockStyle.Fill,FlowDirection=FlowDirection.RightToLeft,WrapContents=false,Padding=new Padding(0,6,0,0)};
             run.Text="Проверить";run.Width=155;run.Height=33;run.BackColor=Color.FromArgb(35,69,100);run.ForeColor=Color.White;run.FlatStyle=FlatStyle.Flat;run.Click+=(s,e)=>Start();bottom.Controls.Add(run);
             cancel.Text="Отмена";cancel.Width=100;cancel.Height=33;cancel.Enabled=false;cancel.Click+=(s,e)=>{if(token!=null)token.Cancel();cancel.Enabled=false;};bottom.Controls.Add(cancel);
@@ -52,15 +53,23 @@ namespace PhotoAudit {
         }
         Button Edit(string text,int width,EventHandler handler){var b=new Button{Text=text,Width=width,Height=31};b.Click+=handler;editing.Add(b);return b;}
         TableLayoutPanel PathRow(string label,TextBox box,EventHandler action){var p=new TableLayoutPanel{Dock=DockStyle.Fill,ColumnCount=3};p.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute,140));p.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));p.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute,110));p.Controls.Add(new Label{Text=label,AutoSize=true,Anchor=AnchorStyles.Left},0,0);box.Dock=DockStyle.Fill;p.Controls.Add(box,1,0);p.Controls.Add(Edit("Обзор…",100,action),2,0);return p;}
-        void Choose(){using(var d=new OpenFileDialog{Filter="Изображения и ZIP|*.jpg;*.jpeg;*.png;*.bmp;*.zip",Multiselect=true,Title="Выберите фотографии или архив"})if(d.ShowDialog(this)==DialogResult.OK)foreach(var p in d.FileNames)AddFile(p);}
-        void Folder(){using(var d=new FolderBrowserDialog{Description="Папка фотографий, включая вложенные папки"})if(d.ShowDialog(this)==DialogResult.OK)AddFile(d.SelectedPath);}
+        void Benchmark(){
+            using(var before=new OpenFileDialog{Filter="Результаты проверки|*.json",Title="Результаты ДО изменения программы"})if(before.ShowDialog(this)==DialogResult.OK)
+            using(var after=new OpenFileDialog{Filter="Результаты проверки|*.json",Title="Результаты ПОСЛЕ изменения программы"})if(after.ShowDialog(this)==DialogResult.OK)
+            using(var truth=new OpenFileDialog{Filter="Ручной эталон (необязательно)|*.json",Title="Выберите ручной эталон; Отмена — сравнение без эталона"}){
+                string reference=truth.ShowDialog(this)==DialogResult.OK?truth.FileName:null;
+                using(var dest=new SaveFileDialog{Filter="Отчёт сравнения|*.html",FileName="Сравнение_качества.html"})if(dest.ShowDialog(this)==DialogResult.OK){try{QualityBenchmark.Compare(before.FileName,after.FileName,dest.FileName,reference);Process.Start(new ProcessStartInfo(dest.FileName){UseShellExecute=true});}catch(Exception ex){MessageBox.Show(this,ex.Message,"Сравнение качества");}}
+            }
+        }
+        void Choose(){using(var d=new OpenFileDialog{Filter="Изображения, PDF и ZIP|*.jpg;*.jpeg;*.png;*.bmp;*.pdf;*.zip",Multiselect=true,Title="Выберите фотографии, PDF или архив"})if(d.ShowDialog(this)==DialogResult.OK)foreach(var p in d.FileNames)AddFile(p);}
+        void Folder(){using(var d=new FolderBrowserDialog{Description="Папка фотографий и PDF, включая вложенные папки"})if(d.ShowDialog(this)==DialogResult.OK)AddFile(d.SelectedPath);}
         public void AddFile(string path){path=Path.GetFullPath(path);if(!inputs.Any(p=>string.Equals(p,path,StringComparison.OrdinalIgnoreCase))){inputs.Add(path);RefreshInputs();}}
         void RefreshInputs(){list.Items.Clear();foreach(var p in inputs)list.Items.Add(p);counts.Text="Выбрано: "+inputs.Count;}
         void Append(string s){log.AppendText("\n"+s);log.SelectionStart=log.TextLength;log.ScrollToCaret();}
         void Ui(Action action){if(!IsDisposed&&IsHandleCreated)BeginInvoke(action);}
         void SetBusy(bool value){busy=value;run.Enabled=!value;cancel.Enabled=value;open.Enabled=!value&&report!=null;registry.Enabled=!value;output.Enabled=!value;list.Enabled=!value;foreach(var b in editing)b.Enabled=!value;}
         void Start(){
-            if(inputs.Count==0){MessageBox.Show(this,"Добавьте фотографии или ZIP.",Text);return;}
+            if(inputs.Count==0){MessageBox.Show(this,"Добавьте фотографии, PDF или ZIP.",Text);return;}
             if(registry.Text!=""&&!File.Exists(registry.Text)){MessageBox.Show(this,"Реестр Excel не найден.",Text);return;}
             string dest;try{dest=Path.Combine(Path.GetFullPath(output.Text),"Проверка_"+DateTime.Now.ToString("yyyyMMdd_HHmmss_fff"));}catch(Exception ex){MessageBox.Show(this,ex.Message,Text);return;}
             var selected=inputs.ToList();string reference=registry.Text;token=new CancellationTokenSource();SetBusy(true);bar.Value=0;Append("Начата проверка.");

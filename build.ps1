@@ -1,4 +1,4 @@
-﻿param([ValidatePattern('^\d+\.\d+\.\d+$')][string]$Version='1.0.0')
+﻿param([ValidatePattern('^\d+\.\d+\.\d+$')][string]$Version='1.1.0')
 $ErrorActionPreference='Stop'
 Push-Location -LiteralPath $PSScriptRoot
 $infoPath=Join-Path $PSScriptRoot 'AppInfo.cs'
@@ -7,7 +7,7 @@ $infoText=[regex]::Replace($infoText,'Assembly(Version|FileVersion)\("[0-9.]+"\)
 [IO.File]::WriteAllText($infoPath,$infoText,[Text.UTF8Encoding]::new($false))
 $compiler=Join-Path $env:WINDIR 'Microsoft.NET/Framework64/v4.0.30319/csc.exe'
 if(!(Test-Path -LiteralPath $compiler)){$compiler=Join-Path $env:WINDIR 'Microsoft.NET/Framework/v4.0.30319/csc.exe'}
-& $compiler /nologo /target:winexe /platform:anycpu /optimize+ /codepage:65001 '/out:Автопроверка_документов.exe' /r:System.Windows.Forms.dll /r:System.Drawing.dll /r:System.Xml.Linq.dll /r:System.IO.Compression.dll /r:System.IO.Compression.FileSystem.dll /r:System.Web.dll /r:System.Web.Extensions.dll AuditProgram.cs AuditEngine.cs XlsxReader.cs Updates.cs AppInfo.cs
+& $compiler /nologo /target:winexe /platform:anycpu /optimize+ /codepage:65001 '/out:Автопроверка_документов.exe' /r:System.Windows.Forms.dll /r:System.Drawing.dll /r:System.Xml.Linq.dll /r:System.IO.Compression.dll /r:System.IO.Compression.FileSystem.dll /r:System.Web.dll /r:System.Web.Extensions.dll AuditProgram.cs AuditEngine.cs AdvancedAudit.cs FormAnalysis.cs QualityBenchmark.cs XlsxReader.cs Updates.cs AppInfo.cs
 if($LASTEXITCODE -ne 0){throw 'Compilation failed'}
 $ocrPath=Join-Path $PSScriptRoot 'Recognize.ps1'
 [IO.File]::WriteAllText($ocrPath,[IO.File]::ReadAllText($ocrPath,[Text.Encoding]::UTF8),[Text.UTF8Encoding]::new($true))

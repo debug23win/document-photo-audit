@@ -13,5 +13,4 @@ work/
 reports/
 .ocr-work/
 .update-backup-*/
-!tests/fixtures/Анна.xlsx
-!tests/fixtures/Борис.xlsx
+tests/.runs/
