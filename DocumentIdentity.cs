@@ -53,20 +53,35 @@ namespace PhotoAudit {
             }
             return result;
         }
-        public static string PageCode(OcrPage page,string image=null){
+        public static string FieldCode(OcrPage page,string image,out bool strong){
+            strong=false;
             var ws=Words(page);
             foreach(var line in page.lines??new List<Line>()){
                 string t=line.text??"";var inline=Regex.Match(t,@"(?:Обозначение\s+документа|Шифр(?:\s+(?:документа|тома))?)\s*[:=]\s*(?<v>.+)$",RegexOptions.IgnoreCase);
-                if(inline.Success)return Value(inline.Groups["v"].Value);
-                var label=(line.words??new List<Word>()).FirstOrDefault(w=>Regex.IsMatch(w.text??"",@"^(?:Обозначение|Шифр)$",RegexOptions.IgnoreCase));if(label==null)continue;
+                if(inline.Success){strong=true;return Value(inline.Groups["v"].Value);}
+                var label=(line.words??new List<Word>()).FirstOrDefault(w=>Regex.IsMatch(w.text??"",@"^(?:Обозначение(?:документа)?|Шифр)$",RegexOptions.IgnoreCase));if(label==null)continue;
+                if((label.text??"").StartsWith("Шифр",StringComparison.OrdinalIgnoreCase)&&ws.Any(w=>w.x<label.x&&Math.Abs(w.y-label.y)<page.height*.025&&Regex.IsMatch(w.text??"",@"^(?:Наименование|Название)$",RegexOptions.IgnoreCase)))continue;
                 // A table header has its value underneath, bounded by the next column header.
                 double end=(line.words??new List<Word>()).Max(w=>w.y+w.height);
                 var next=ws.Where(w=>w.x>label.x+page.width*.10&&Math.Abs(w.y-label.y)<page.height*.03&&Regex.IsMatch(w.text??"",@"^(?:Наименование|Номер|Вид)$",RegexOptions.IgnoreCase)).OrderBy(w=>w.x).FirstOrDefault();
                 double right=next==null?Math.Min(page.width,label.x+page.width*.35):next.x-page.width*.01;
-                if(next!=null&&image!=null&&File.Exists(image))using(var bitmap=new Bitmap(image)){var rule=Rule(bitmap,page,label.x+label.width+3,next.x-3,label.y-label.height,label.height*7,false);if(rule.HasValue)right=rule.Value-2;}
+                if(next!=null&&image!=null&&File.Exists(image))using(var bitmap=new Bitmap(image)){var rule=Rule(bitmap,page,label.x+label.width+3,next.x-3,label.y-label.height,label.height*7,false);if(rule.HasValue){right=rule.Value-2;strong=true;}}
                 var candidates=ws.Where(w=>w.x>=Math.Max(0,label.x-page.width*.025)&&w.x+w.width/2<right&&w.y>end+2&&w.y<end+page.height*.12&&!Regex.IsMatch(w.text??"",@"^(?:документа|тома)$",RegexOptions.IgnoreCase)).OrderBy(w=>w.y).ToList();
-                if(candidates.Count>0){double first=candidates[0].y;return Cell(candidates.Where(w=>w.y<first+page.height*.055).ToList());}
+                if(candidates.Count>0){
+                    double first=candidates[0].y;double lineHeight=Math.Max(6,candidates[0].height);
+                    var firstLine=candidates.Where(w=>w.y<first+lineHeight*.75).OrderBy(w=>w.x).ToList();
+                    for(int i=1;i<firstLine.Count;i++)if(firstLine[i].x-(firstLine[i-1].x+firstLine[i-1].width)>Math.Max(page.width*.025,lineHeight*2)){firstLine=firstLine.Take(i).ToList();break;}
+                    string value=Cell(firstLine);
+                    int wraps=0;double endLine=firstLine.Max(w=>w.y+w.height);
+                    while(value!=null&&(value.EndsWith("-")||value.EndsWith("/"))&&wraps++<3){var rest=candidates.Where(w=>w.y>=endLine).ToList();if(rest.Count==0)break;double y=rest[0].y;var nextLine=rest.Where(w=>w.y<y+Math.Max(6,rest[0].height)*.75).ToList();value=Value(value+Cell(nextLine));endLine=nextLine.Max(w=>w.y+w.height);}
+                    return value;
+                }
             }
+            return null;
+        }
+        public static string PageCode(OcrPage page,string image=null){bool strong;return FieldCode(page,image,out strong)??TitleCode(page);}
+        public static string TitleCode(OcrPage page){
+            var ws=(page.lines??new List<Line>()).Where(l=>l.words!=null&&l.words.Count==1).SelectMany(l=>l.words).ToList();
             // An unlabelled title code needs stronger typography and placement evidence.
             var tokens=ws.Where(w=>w.y>page.height*.45&&w.y<page.height*.83&&w.x>page.width*.20&&w.x<page.width*.75&&Regex.IsMatch(w.text??"",@"^(?=.*\p{L})(?=.*\d)[\p{L}\p{N}][\p{L}\p{N}._/\-]{3,}$")&&!Regex.IsMatch(w.text,@"^(?:CRC|ISBN)",RegexOptions.IgnoreCase)).Select(w=>Value(w.text)).Distinct().ToList();
             return tokens.Count==1?tokens[0]:null;

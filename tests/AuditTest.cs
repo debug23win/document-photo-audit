@@ -62,6 +62,11 @@ class AuditTest {
             if(iul.Code!=DocumentIdentity.Value(arbitrary)||iul.Kind!="ИУЛ")throw new Exception("Arbitrary field code rejected: "+arbitrary);
             if(DocumentIdentity.MatchFile("Альбом_"+arbitrary+".pdf",new[]{DocumentIdentity.Value(arbitrary)})!=DocumentIdentity.Value(arbitrary))throw new Exception("Arbitrary filename matching failed: "+arbitrary);
         }
+        var projectHeader=new OcrPage{width=1200,height=2200,text="Наименование и Шифр объекта\nТестовое название",lines=new List<Line>{new Line{text="Наименование и Шифр объекта",words=new List<Word>{W("Наименование",450,300),W("Шифр",650,300),W("объекта",750,300)}},new Line{text="Тестовое название",words=new List<Word>{W("Тестовое",450,400),W("название",600,400)}}}};
+        bool strongField;if(DocumentIdentity.FieldCode(projectHeader,file,out strongField)!=null)throw new Exception("Object name and code header is not the document designation");
+        var arbitraryInventory=InventoryPage("Опись","АЛЬФА");arbitraryInventory.lines[1].words.RemoveAll(w=>w.text=="123-45-6789-");arbitraryInventory.lines[1].words.Add(W("1.",30,600));
+        var arbitraryDocument=new OcrPage{width=1200,height=2200,text="Обозначение документа\nАЛЬФА\nКнига 1\nСсылка 123-45-6789-ИЛО4.1.1",lines=new List<Line>{new Line{text="Обозначение документа",words=new List<Word>{W("Обозначение",40,300)}},new Line{text="АЛЬФА",words=new List<Word>{W("АЛЬФА",40,400)}},new Line{text="Ссылка 123-45-6789-ИЛО4.1.1",words=new List<Word>{W("Ссылка",450,800),W("123-45-6789-ИЛО4.1.1",600,800)}}}};
+        var arbitraryPhoto=new Photo{Id=31,Image=file,Ocr=arbitraryDocument};AuditEngine.Analyze(new List<Photo>{new Photo{Id=30,Image=file,Ocr=arbitraryInventory},arbitraryPhoto},null);if(arbitraryPhoto.Code!="АЛЬФА")throw new Exception("Exact arbitrary designation must take precedence over an unrelated code reference");
         if(DocumentIdentity.MatchFile("ABC-120.pdf",new[]{"ABC-12"})!=null||DocumentIdentity.MatchFile("ABC-12.3.pdf",new[]{"ABC-12"})!=null)throw new Exception("Partial code must not match another document");
         Console.WriteLine("Audit tests passed: classification, names, CRC, single-row/continuation inventory, wrapped volume, ignored total count with sheet-number review");return 0;
     }
