@@ -120,18 +120,19 @@ namespace PhotoAudit {
             var candidates=p.Words.Where(w=>w.y>marker.y+marker.height*.5&&w.y<marker.y+150&&Math.Abs(w.x+w.width/2-centre)<45&&Regex.IsMatch(Digits(w.text),@"^\d{1,2}$")).OrderBy(w=>w.y).ToList();
             return candidates.Count>0?(int?)int.Parse(Digits(candidates[0].text)):null;
         }
-        static string BookText(Photo p){
-            string s=p.Ocr.text??"";
-            if(p.Kind=="ИУЛ"||p.Kind.StartsWith("Титул")){
-                var anchor=p.Words.Where(w=>N(w.text)=="КНИГА"&&w.y>p.Ocr.height*.25).OrderBy(w=>w.y).FirstOrDefault();
-                var end=anchor==null?null:p.Words.Where(w=>N(w.text)=="ТОМ"&&w.y>anchor.y+anchor.height&&w.x>=anchor.x-p.Ocr.width*.03).OrderBy(w=>w.y).FirstOrDefault();
-                if(anchor!=null&&end!=null&&end.y-anchor.y<p.Ocr.height*.25){
-                    var rows=new List<List<Word>>();foreach(var word in p.Words.Where(w=>w.x>=anchor.x-p.Ocr.width*.02&&w.y>=anchor.y-anchor.height*.5&&w.y<end.y-end.height*.25).OrderBy(w=>w.y).ThenBy(w=>w.x)){
-                        var row=rows.FirstOrDefault(r=>Math.Abs(r.Average(w=>w.y+w.height/2)-(word.y+word.height/2))<Math.Max(word.height,r.Average(w=>w.height))*.65);if(row==null){row=new List<Word>();rows.Add(row);}row.Add(word);
-                    }
-                    s=string.Join("\n",rows.OrderBy(r=>r.Average(w=>w.y)).Select(r=>string.Join(" ",r.OrderBy(w=>w.x).Select(w=>w.text))));
-                }
+        internal static string IulDocumentText(Photo p){
+            if(p.Kind!="ИУЛ")return null;
+            var anchor=p.Words.Where(w=>Regex.IsMatch(N(w.text),@"^(?:РАЗДЕЛ|ПОДРАЗДЕЛ|ЧАСТЬ|КНИГА)$")&&w.y>p.Ocr.height*.25&&w.x>p.Ocr.width*.15).OrderBy(w=>w.y).FirstOrDefault();
+            var end=anchor==null?null:p.Words.Where(w=>N(w.text)=="ТОМ"&&w.y>anchor.y+anchor.height&&w.x>=anchor.x-p.Ocr.width*.03).OrderBy(w=>w.y).FirstOrDefault();
+            if(anchor==null||end==null||end.y-anchor.y>p.Ocr.height*.50)return null;
+            var revision=AdvancedAudit.RevisionBounds(p.Ocr);double right=revision.HasValue?revision.Value.Left:p.Ocr.width*.82;
+            var rows=new List<List<Word>>();foreach(var word in p.Words.Where(w=>w.x>=anchor.x-p.Ocr.width*.02&&w.x+w.width/2<right&&w.y>=anchor.y-anchor.height*.5&&w.y<end.y-end.height*.25).OrderBy(w=>w.y).ThenBy(w=>w.x)){
+                var row=rows.FirstOrDefault(r=>Math.Abs(r.Average(w=>w.y+w.height/2)-(word.y+word.height/2))<Math.Max(word.height,r.Average(w=>w.height))*.65);if(row==null){row=new List<Word>();rows.Add(row);}row.Add(word);
             }
+            return string.Join("\n",rows.OrderBy(r=>r.Average(w=>w.y)).Select(r=>string.Join(" ",r.OrderBy(w=>w.x).Select(w=>w.text))));
+        }
+        static string BookText(Photo p){
+            string s=IulDocumentText(p)??p.Ocr.text??"";
             var m=Regex.Match(s,@"Книга\s*\d+[.,]?\s*(?<name>[\s\S]*?)(?=\r?\n\s*(?:\d{3}\s*[-–—]|Том\s*\d|Главный\s|Заместител)|$)",RegexOptions.IgnoreCase);
             if(!m.Success)return null;string value=m.Groups["name"].Value;
             if(p.Kind=="ИУЛ")value=Regex.Split(value,@"\b(?:Том|CRC32|Наименование файла|Алгоритм)\b",RegexOptions.IgnoreCase)[0];
@@ -261,6 +262,7 @@ namespace PhotoAudit {
             int processed=0;var inspected=new bool[photos.Count];
             ParallelWork.For(photos.Count,workers,cancel,i=>{var p=photos[i];if(inspectPages==null||inspectPages.Contains(p.Id)||p.Signatures==null||p.Seal==null||p.Kind=="Титул"&&p.Seal.Status=="Не применяется"){FormAnalysis.Inspect(p,null);inspected[i]=true;}int n=Interlocked.Increment(ref processed);if(progress!=null)progress(89+(int)(8.0*n/Math.Max(1,photos.Count)),"Правила и сохранённые данные: "+n+" / "+photos.Count);});
             if(inspectPages!=null)for(int i=0;i<photos.Count;i++)if(inspected[i])inspectPages.Add(photos[i].Id);
+            foreach(var p in photos){string body=IulDocumentText(p);if(body!=null)p.Sections=FormAnalysis.Sections(body);}
             foreach(var entry in r.Inventory)entry.Sections=FormAnalysis.InventorySections(entry.Photo,entry);
             // Continuation pages may omit the stage; propagate it only within the same explicit box number.
             var kindByBox=r.Inventory.Where(i=>i.Box.HasValue&&i.DocumentationKind!=null).GroupBy(i=>i.Box.Value).ToDictionary(g=>g.Key,g=>g.Select(i=>i.DocumentationKind).Distinct().ToList());
