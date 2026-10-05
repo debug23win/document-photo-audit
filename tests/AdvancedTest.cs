@@ -37,6 +37,8 @@ class AdvancedTest {
     }
     static int Main() {
         ScannerTest();DigitShapeTest();
+        Assert(AdvancedAudit.StableWholeReading(new[]{"2",null,"2"}),"Two agreeing full-page readings should avoid redundant numeric crops");
+        Assert(!AdvancedAudit.StableWholeReading(new[]{"2","2","3"})&&!AdvancedAudit.StableWholeReading(new[]{null,"2",null})&&!AdvancedAudit.StableWholeReading(new string[0]),"Disagreement, a lone reading or blank evidence must retain numeric crops");
         Assert(Pagination.Number("Лист 1")=="1"&&Pagination.Number("Лист З")=="3","Digit-cell OCR normalization failed");
         Assert(Pagination.Number("Лист")==null&&Pagination.Number("1 3")==null&&Pagination.Number("Лист 0")==null,"Empty/ambiguous numeric cells must not fabricate a number");
         var ownHeader=new OcrPage{width=1000,height=2000,lines=new List<Line>{new Line{words=new List<Word>{W("ЖЕЛДОР",100,50,160),W("ПРОЕКТ",100,100,160),W("Росжелдорпроект",300,440,250)}}}};

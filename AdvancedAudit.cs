@@ -98,7 +98,7 @@ namespace PhotoAudit {
             return output.Bitmap();
         }
         static double Distance(PointF a,PointF b){return Math.Sqrt((a.X-b.X)*(a.X-b.X)+(a.Y-b.Y)*(a.Y-b.Y));}
-        public static List<CropRequest> Crops(Photo p,string folder) {
+        public static List<CropRequest> Crops(Photo p,string folder,ISet<string> skip=null) {
             var requests=new List<CropRequest>();float w=p.Ocr.width,h=p.Ocr.height;var boxes=new Dictionary<string,RectangleF>();
             if(p.Kind=="ИУЛ"){
                 var marker=p.Words.FirstOrDefault(t=>N(t.text).Replace('С','C').Replace('Р','R').StartsWith("CRC32"));
@@ -112,6 +112,7 @@ namespace PhotoAudit {
                 boxes["Roles"]=new RectangleF(0,h*.65f,w,h*.30f);boxes["Sections"]=new RectangleF(0,h*.40f,w,h*.28f);
                 if(N(p.Ocr.text).Contains("СОГЛАСОВАНО"))boxes["Approval"]=new RectangleF(0,h*.12f,w*.78f,h*.18f);
             } else if(p.Kind=="Опись")boxes["Inventory"]=new RectangleF(0,h*.12f,w,h*.82f);
+            if(skip!=null)foreach(string field in skip)boxes.Remove(field=="Page"?"Footer":field);
             using(var full=new Bitmap(p.FullImage))foreach(var box in boxes) {
                 var area=RectangleF.Intersect(box.Value,new RectangleF(0,0,w,h));float ratio=full.Width/w;var actual=Rectangle.Round(new RectangleF(area.X*ratio,area.Y*ratio,area.Width*ratio,area.Height*ratio));actual=Rectangle.Intersect(actual,new Rectangle(0,0,full.Width,full.Height));
                 if(actual.Width<8||actual.Height<8)continue;
@@ -135,6 +136,9 @@ namespace PhotoAudit {
             if(groups.Count==1){result.Value=groups[0].Key;result.Status=result.Agreement>=2?"Подтверждено повторным чтением":"Одно чтение";}
             else if(groups[0].Count()>=2&&groups[0].Count()>=groups[1].Count()*2){result.Value=groups[0].Key;result.Status="Большинство чтений; были альтернативы";}
             else result.Status="Спорное чтение";return result;
+        }
+        public static bool StableWholeReading(IEnumerable<string> readings){
+            var values=readings.Where(value=>!string.IsNullOrWhiteSpace(value)).ToList();return values.Count>=2&&values.Distinct().Count()==1;
         }
         public static Reading CrcConsensus(List<Tuple<string,string>> reads,List<Tuple<string,string>> latin) {
             var reading=Consensus("CRC",reads);
