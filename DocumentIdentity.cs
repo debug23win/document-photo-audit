@@ -9,7 +9,7 @@ using System.Text.RegularExpressions;
 namespace PhotoAudit {
     // Codes are field values. No prefix, alphabet or numbering scheme is required.
     public static class DocumentIdentity {
-        public sealed class Row {public string Code,Volume;public double Y;}
+        public sealed class Row {public string Code,Volume;public double Y,Top,Bottom;public bool Continuation;}
         public static string Value(string text){
             string s=(text??"").Normalize(NormalizationForm.FormKC).Replace('–','-').Replace('—','-').Trim();
             s=Regex.Replace(s,@"\s+"," ").Trim(' ','"','«','»');
@@ -23,33 +23,69 @@ namespace PhotoAudit {
                 var line=lines.FirstOrDefault(l=>Math.Abs(l.Average(v=>v.y+v.height/2)-(w.y+w.height/2))<Math.Max(w.height,l.Average(v=>v.height))*.65);
                 if(line==null){line=new List<Word>();lines.Add(line);}line.Add(w);
             }
-            string result="";foreach(var line in lines.OrderBy(l=>l.Average(w=>w.y))){string part=string.Join(" ",line.OrderBy(w=>w.x).Select(w=>w.text));result+=(result.Length==0||result.EndsWith("-")||result.EndsWith("/")?"":" ")+part;}return Value(result);
+            string result="";foreach(var line in lines.OrderBy(l=>l.Average(w=>w.y))){string part=string.Join(" ",line.OrderBy(w=>w.x).Select(w=>w.text));result+=(result.Length==0||result.EndsWith("-")||result.EndsWith("/")||result.EndsWith(".")?"":" ")+part;}return Value(result);
+        }
+        static List<double> HorizontalRules(Bitmap bitmap,OcrPage page,double left,double right,double top) {
+            var pixels=new Pixels(bitmap);double scale=bitmap.Width/(double)page.width;var rows=new List<double>();
+            int lo=Math.Max(0,(int)((left+3)*scale)),hi=Math.Min(pixels.Width-1,(int)((right-3)*scale));
+            if(hi-lo<15)return rows;
+            for(int y=Math.Max(0,(int)(top*scale));y<pixels.Height*.97;y++) {
+                int dark=0;for(int n=0;n<32;n++)if(pixels.Grey(lo+(hi-lo)*n/31,y)<180)dark++;
+                if(dark<28)continue;double at=y/scale;
+                if(rows.Count==0||at-rows.Last()>Math.Max(4,page.height*.002))rows.Add(at);
+            }
+            return rows;
         }
         static double? Rule(Bitmap image,OcrPage page,double from,double to,double y,double height,bool last){
             double scale=image.Width/(double)page.width;int min=Math.Max(0,(int)(from*scale)),max=Math.Min(image.Width-1,(int)(to*scale));var positions=new List<int>();
             for(int x=min;x<=max;x++){int dark=0,total=0;for(int i=0;i<30;i++){int yy=(int)((y+height*i/29)*scale);if(yy<0||yy>=image.Height)continue;var c=image.GetPixel(x,yy);if((c.R+c.G+c.B)/3<175)dark++;total++;}if(total>=20&&dark>=total*.8)positions.Add(x);}
             return positions.Count==0?(double?)null:(last?positions.Last():positions.First())/scale;
         }
+        public static RectangleF? InventoryCodeBounds(OcrPage page,string image){
+            var ws=Words(page);var marker=ws.Where(w=>Regex.IsMatch(w.text??"",@"^(?:ШИФР|ОБОЗНАЧЕНИЕ)",RegexOptions.IgnoreCase)).OrderBy(w=>w.y).FirstOrDefault();if(marker==null)return null;
+            var name=ws.Where(w=>w.x>marker.x&&Math.Abs(w.y-marker.y)<page.height*.04&&Regex.IsMatch(w.text??"",@"^НАИМЕНОВАНИЕ",RegexOptions.IgnoreCase)).OrderBy(w=>w.x).FirstOrDefault();if(name==null)return null;
+            double left=Math.Max(0,marker.x-page.width*.055),right=name.x-page.width*.015;
+            if(image!=null&&File.Exists(image))using(var bitmap=new Bitmap(image)){
+                var l=Rule(bitmap,page,marker.x-page.width*.14,marker.x-3,marker.y-marker.height,marker.height*7,true);var r=Rule(bitmap,page,marker.x+marker.width+3,name.x-3,marker.y-marker.height,marker.height*7,false);
+                if(l.HasValue)left=l.Value+2;if(r.HasValue)right=r.Value-2;
+            }
+            if(right<=left)return null;return new RectangleF((float)left,(float)(marker.y+marker.height*2),(float)(right-left),(float)(page.height*.97-marker.y-marker.height*2));
+        }
         public static List<Row> InventoryRows(OcrPage page,string image=null){
             var ws=Words(page);var marker=ws.Where(w=>Regex.IsMatch(w.text??"",@"^(?:ШИФР|ОБОЗНАЧЕНИЕ)",RegexOptions.IgnoreCase)).OrderBy(w=>w.y).FirstOrDefault();if(marker==null)return new List<Row>();
             var name=ws.Where(w=>w.x>marker.x&&Math.Abs(w.y-marker.y)<page.height*.04&&Regex.IsMatch(w.text??"",@"^НАИМЕНОВАНИЕ",RegexOptions.IgnoreCase)).OrderBy(w=>w.x).FirstOrDefault();if(name==null)return new List<Row>();
             double left=Math.Max(0,marker.x-page.width*.055),right=name.x-page.width*.015,bottom=marker.y+marker.height*2;
+            var rules=new List<double>();
             if(image!=null&&File.Exists(image))using(var bitmap=new Bitmap(image)){
                 var l=Rule(bitmap,page,marker.x-page.width*.14,marker.x-3,marker.y-marker.height,marker.height*7,true);
                 var r=Rule(bitmap,page,marker.x+marker.width+3,name.x-3,marker.y-marker.height,marker.height*7,false);
                 if(l.HasValue)left=l.Value+2;if(r.HasValue)right=r.Value-2;
+                if(l.HasValue&&r.HasValue)rules=HorizontalRules(bitmap,page,left,right,marker.y+marker.height);
             }
             else {var body=ws.Where(w=>w.x>marker.x+marker.width&&w.y>bottom&&Regex.IsMatch(w.text??"",@"^(?:Книга|Часть)$",RegexOptions.IgnoreCase)).OrderBy(w=>w.x).FirstOrDefault();if(body!=null)right=Math.Min(right,body.x-page.width*.01);}
             if(right<=left)return new List<Row>();
             var volume=ws.Where(w=>w.x<left&&w.x>page.width*.08&&w.y>bottom&&Regex.IsMatch(w.text??"",@"^\d+(?:[.]\d+){1,6}$")).OrderBy(w=>w.y).ToList();
-            var numbers=ws.Where(w=>w.x<page.width*.10&&w.y>bottom&&Regex.IsMatch(w.text??"",@"^\d{1,4}[.]?$" )).OrderBy(w=>w.y).ToList();
-            var anchors=numbers.Count>0?numbers:volume;var result=new List<Row>();
-            for(int i=0;i<anchors.Count;i++){
+            var numbers=ws.Where(w=>w.x<Math.Min(page.width*.20,left*.60)&&w.y>bottom&&Regex.IsMatch(w.text??"",@"^\d{1,4}[.]?$" )).OrderBy(w=>w.y).ToList();
+            var anchors=numbers.Count>0?numbers:volume;var result=new List<Row>();var bands=new List<Tuple<double,double>>();
+            if(rules.Count>=3){
+                if(rules[0]>bottom&&ws.Any(w=>w.x+w.width/2>=left&&w.x+w.width/2<right&&w.y>bottom&&w.y<rules[0]-2))bands.Add(Tuple.Create(bottom,rules[0]-2));
+                for(int i=0;i+1<rules.Count;i++)bands.Add(Tuple.Create(rules[i]+2,rules[i+1]-2));
+            }
+            else {
+              if(anchors.Count>0&&numbers.Count>0&&ws.Any(w=>w.x+w.width/2>=left&&w.x+w.width/2<right&&w.y>bottom&&w.y<anchors[0].y-anchors[0].height))bands.Add(Tuple.Create(bottom,anchors[0].y-anchors[0].height));
+              for(int i=0;i<anchors.Count;i++){
                 var a=anchors[i];double top=numbers.Count>0?a.y-a.height: i==0?bottom:(anchors[i-1].y+a.y)/2;
                 double end=i+1<anchors.Count?(numbers.Count>0?anchors[i+1].y-anchors[i+1].height:(a.y+anchors[i+1].y)/2):page.height*.95;
-                var cell=ws.Where(w=>w.x+w.width/2>=left&&w.x+w.width/2<right&&w.y>=top&&w.y<end).ToList();string code=Cell(cell);
+                bands.Add(Tuple.Create(top,end));
+              }
+            }
+            foreach(var band in bands){
+                double top=band.Item1,end=band.Item2;
+                var cell=ws.Where(w=>w.x+w.width/2>=left&&w.x+w.width/2<right&&w.y+w.height/2>=top&&w.y+w.height/2<end).ToList();string code=Cell(cell);
                 if(code==null||Regex.IsMatch(code,@"^(?:ШИФР|ТОМА|ДОКУМЕНТ|\d{1,2})$",RegexOptions.IgnoreCase)&&cell.All(w=>w.y<bottom+marker.height*2))continue;
-                var v=volume.FirstOrDefault(w=>w.y>=top&&w.y<end);result.Add(new Row{Code=code,Volume=v==null?null:v.text,Y=cell.Min(w=>w.y)});
+                // The numbered column guide is a header row, not a document named "3".
+                if(cell.All(w=>w.y<bottom+marker.height*4)&&ws.Count(w=>w.y>=top&&w.y<end&&Regex.IsMatch(w.text??"",@"^[1-6З][.]?$"))>=3)continue;
+                var v=volume.FirstOrDefault(w=>w.y>=top&&w.y<end);result.Add(new Row{Code=code,Volume=v==null?null:v.text,Y=cell.Min(w=>w.y),Top=top,Bottom=end,Continuation=!numbers.Any(w=>w.y>=top&&w.y<end)&&v==null});
             }
             return result;
         }

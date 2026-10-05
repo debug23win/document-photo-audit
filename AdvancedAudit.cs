@@ -88,13 +88,24 @@ namespace PhotoAudit {
         }
         static double[] Fit(double[] x,double[] y){double xm=x.Average(),ym=y.Average(),den=x.Sum(a=>(a-xm)*(a-xm));double slope=den==0?0:x.Select((a,i)=>(a-xm)*(y[i]-ym)).Sum()/den;return new[]{ym-slope*xm,slope};}
         public static Bitmap Warp(Bitmap src,PointF[] q) {
+            if(src.Width<2||src.Height<2)return new Bitmap(src);
             var p=new Pixels(src);int w=(int)Math.Max(Distance(q[0],q[1]),Distance(q[3],q[2])),h=(int)Math.Max(Distance(q[0],q[3]),Distance(q[1],q[2]));
             w=Math.Max(1,w);h=Math.Max(1,h);var output=new Pixels(w,h);
             double dx1=q[1].X-q[2].X,dx2=q[3].X-q[2].X,dx3=q[0].X-q[1].X+q[2].X-q[3].X,dy1=q[1].Y-q[2].Y,dy2=q[3].Y-q[2].Y,dy3=q[0].Y-q[1].Y+q[2].Y-q[3].Y;
             double den=dx1*dy2-dx2*dy1,g=0,j=0;if(Math.Abs(den)>.0001){g=(dx3*dy2-dx2*dy3)/den;j=(dx1*dy3-dx3*dy1)/den;}
             double a=q[1].X-q[0].X+g*q[1].X,c=q[3].X-q[0].X+j*q[3].X,d=q[1].Y-q[0].Y+g*q[1].Y,e=q[3].Y-q[0].Y+j*q[3].Y;
-            for(int y=0;y<h;y++)for(int x=0;x<w;x++){double u=x/(double)Math.Max(1,w-1),v=y/(double)Math.Max(1,h-1),z=g*u+j*v+1;double sx=(a*u+c*v+q[0].X)/z,sy=(d*u+e*v+q[0].Y)/z;int ix=Math.Max(0,Math.Min(p.Width-2,(int)sx)),iy=Math.Max(0,Math.Min(p.Height-2,(int)sy));double fx=Math.Max(0,Math.Min(1,sx-ix)),fy=Math.Max(0,Math.Min(1,sy-iy));int i=(y*w+x)*3;
-                for(int k=0;k<3;k++)output.Data[i+k]=(byte)((1-fy)*((1-fx)*p.Data[(iy*p.Width+ix)*3+k]+fx*p.Data[(iy*p.Width+ix+1)*3+k])+fy*((1-fx)*p.Data[((iy+1)*p.Width+ix)*3+k]+fx*p.Data[((iy+1)*p.Width+ix+1)*3+k]));}
+            double invWidth=1.0/Math.Max(1,w-1),invHeight=1.0/Math.Max(1,h-1);int stride=p.Width*3;
+            for(int y=0;y<h;y++){
+                double v=y*invHeight,zbase=j*v+1,xbase=c*v+q[0].X,ybase=e*v+q[0].Y;int outputIndex=y*w*3;
+                for(int x=0;x<w;x++,outputIndex+=3){
+                    double u=x*invWidth,z=g*u+zbase,sx=(a*u+xbase)/z,sy=(d*u+ybase)/z;
+                    int ix=(int)sx,iy=(int)sy;if(ix<0)ix=0;else if(ix>p.Width-2)ix=p.Width-2;if(iy<0)iy=0;else if(iy>p.Height-2)iy=p.Height-2;
+                    double fx=sx-ix,fy=sy-iy;if(fx<0)fx=0;else if(fx>1)fx=1;if(fy<0)fy=0;else if(fy>1)fy=1;
+                    double w00=(1-fx)*(1-fy),w10=fx*(1-fy),w01=(1-fx)*fy,w11=fx*fy;
+                    int i00=iy*stride+ix*3,i10=i00+3,i01=i00+stride,i11=i01+3;
+                    for(int k=0;k<3;k++)output.Data[outputIndex+k]=(byte)(w00*p.Data[i00+k]+w10*p.Data[i10+k]+w01*p.Data[i01+k]+w11*p.Data[i11+k]);
+                }
+            }
             return output.Bitmap();
         }
         static double Distance(PointF a,PointF b){return Math.Sqrt((a.X-b.X)*(a.X-b.X)+(a.Y-b.Y)*(a.Y-b.Y));}
@@ -107,22 +118,31 @@ namespace PhotoAudit {
                 boxes["Footer"]=new RectangleF(w*.65f,h*.82f,w*.35f,h*.18f);
                 var revision=RevisionBounds(p.Ocr);if(revision.HasValue)boxes["Revision"]=revision.Value;
                 boxes["Roles"]=new RectangleF(0,p.Book!=null?h*.56f:h*.07f,w,p.Book!=null?h*.28f:h*.65f);
+                var crcMarkers=p.Words.Where(t=>N(t.text).Replace('С','C').Replace('Р','R').StartsWith("CRC32")).OrderBy(t=>t.y).ToList();
+                if(crcMarkers.Count>1)boxes["Files"]=new RectangleF(0,(float)crcMarkers[0].y-20,(float)crcMarkers.Min(t=>t.x)-10,(float)(crcMarkers.Last().y-crcMarkers[0].y+crcMarkers.Last().height*4+20));
                 if(p.Book!=null)boxes["Sections"]=new RectangleF(w*.25f,h*.28f,w*.54f,h*.22f);
             } else if(p.Kind.StartsWith("Титул")) {
                 boxes["Roles"]=new RectangleF(0,h*.65f,w,h*.30f);boxes["Sections"]=new RectangleF(0,h*.40f,w,h*.28f);
                 if(N(p.Ocr.text).Contains("СОГЛАСОВАНО"))boxes["Approval"]=new RectangleF(0,h*.12f,w*.78f,h*.18f);
-            } else if(p.Kind=="Опись")boxes["Inventory"]=new RectangleF(0,h*.12f,w,h*.82f);
+            } else if(p.Kind=="Опись"){
+                boxes["Inventory"]=new RectangleF(0,h*.12f,w,h*.82f);
+                var codes=DocumentIdentity.InventoryCodeBounds(p.Ocr,p.Image);if(codes.HasValue)boxes["InventoryCodes"]=codes.Value;
+            }
             if(skip!=null)foreach(string field in skip)boxes.Remove(field=="Page"?"Footer":field);
             using(var full=new Bitmap(p.FullImage))foreach(var box in boxes) {
                 var area=RectangleF.Intersect(box.Value,new RectangleF(0,0,w,h));float ratio=full.Width/w;var actual=Rectangle.Round(new RectangleF(area.X*ratio,area.Y*ratio,area.Width*ratio,area.Height*ratio));actual=Rectangle.Intersect(actual,new Rectangle(0,0,full.Width,full.Height));
                 if(actual.Width<8||actual.Height<8)continue;
-                using(var crop=full.Clone(actual,PixelFormat.Format24bppRgb))for(int variant=0;variant<(box.Key=="CRC"?4:2);variant++) {
-                    double enlargement=Math.Min(box.Key=="CRC"||box.Key=="Footer"||box.Key=="Revision"?2:1.25,3500.0/Math.Max(crop.Width,crop.Height));
+                using(var crop=full.Clone(actual,PixelFormat.Format24bppRgb)) {
+                    double enlargement=Math.Min(box.Key=="Files"?3:box.Key=="CRC"||box.Key=="Footer"||box.Key=="Revision"?2:1.25,3500.0/Math.Max(crop.Width,crop.Height));
                     using(var enlarged=new Bitmap(Math.Max(1,(int)(crop.Width*enlargement)),Math.Max(1,(int)(crop.Height*enlargement)))) {
                         using(var gr=Graphics.FromImage(enlarged)){gr.Clear(Color.White);gr.InterpolationMode=System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;gr.DrawImage(crop,0,0,enlarged.Width,enlarged.Height);}
-                        string name="p"+p.Id.ToString("D4")+"-"+box.Key+"-"+variant+(box.Key=="CRC"?".png":".jpg");if(variant%2==0)SaveCrop(enlarged,Path.Combine(folder,name));
-                        else using(var normalized=Normalize(enlarged))SaveCrop(normalized,Path.Combine(folder,name));
-                        requests.Add(new CropRequest{Photo=p.Id,Field=box.Key,Variant=variant==0?"original":"contrast",File=name,Bounds=area,Scale=enlargement*ratio});
+                        string stem="p"+p.Id.ToString("D4")+"-"+box.Key+"-",ext=box.Key=="CRC"?".png":".jpg";
+                        SaveCrop(enlarged,Path.Combine(folder,stem+"0"+ext));
+                        using(var normalized=Normalize(enlarged))SaveCrop(normalized,Path.Combine(folder,stem+"1"+ext));
+                        for(int variant=0;variant<(box.Key=="CRC"?4:2);variant++) {
+                            string name=stem+variant+ext;if(variant>=2)File.Copy(Path.Combine(folder,stem+(variant%2)+ext),Path.Combine(folder,name),true);
+                            requests.Add(new CropRequest{Photo=p.Id,Field=box.Key,Variant=variant%2==0?"original":"contrast",File=name,Bounds=area,Scale=enlargement*ratio});
+                        }
                     }
                 }
             }return requests;
@@ -151,7 +171,9 @@ namespace PhotoAudit {
         }
         public static string Crc(string text) {
             string t=N(text).Replace('С','C').Replace('В','B').Replace('А','A').Replace('Е','E').Replace('О','0').Replace('O','0').Replace('I','1').Replace('L','1').Replace('З','3');
-            var m=Regex.Match(t,@"(?<![A-Z0-9])([0-9A-F]{8})(?![A-Z0-9])");return m.Success?m.Groups[1].Value:null;
+            var m=Regex.Match(t,@"(?:CRC\s*32[^0-9A-F]{0,8})([0-9A-F]{7,8})(?![A-Z0-9])");
+            if(m.Success)return m.Groups[1].Value.PadLeft(8,'0');
+            m=Regex.Match(t,@"(?<![A-Z0-9])([0-9A-F]{8})(?![A-Z0-9])");return m.Success?m.Groups[1].Value:null;
         }
         public static string Footer(OcrPage page,string label) {
             var ws=page.lines.SelectMany(l=>l.words).ToList();var labels=ws.Where(w=>N(w.text).Trim('.',':').StartsWith("ЛИСТ")).OrderBy(w=>w.x).ToList();

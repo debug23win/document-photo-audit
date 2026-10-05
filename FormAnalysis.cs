@@ -9,7 +9,7 @@ using System.Text.RegularExpressions;
 namespace PhotoAudit {
     public static class FormAnalysis {
         static string N(string s){return Regex.Replace((s??"").ToUpperInvariant().Replace('Ё','Е'),@"\s+"," ").Trim();}
-        public static string Organization(string text){string value=Regex.Replace(N(text),@"[^А-Я]","");return value.Contains("ЛЕНГИПРОТР")?"Ленгипротранс":value.Contains("РОСЖЕЛДОР")||value.Contains("ГИПР")&&value.Contains("ТРАНСПУТ")?"Росжелдорпроект":value.Contains("ЖЕЛДОРПРОЕКТ")?"Желдорпроект":"Не определено";}
+        public static string Organization(string text){string value=Regex.Replace(N(text),@"[^А-Я]","");return value.Contains("ТРАНСЭЛЕКТРОПРОЕКТ")?"Трансэлектропроект":value.Contains("ГИПРОТРАНССВЯЗЬ")?"Гипротранссвязь":value.Contains("ЛЕНГИПРОТР")?"Ленгипротранс":value.Contains("РОСЖЕЛДОР")||value.Contains("ГИПР")&&value.Contains("ТРАНСПУТ")?"Росжелдорпроект":value.Contains("ЖЕЛДОРПРОЕКТ")?"Желдорпроект":"Не определено";}
         public static string DocumentOrganization(OcrPage page){var words=(page.lines??new List<Line>()).SelectMany(l=>l.words??new List<Word>()).Where(w=>w.y<page.height*.17).OrderBy(w=>w.y).ThenBy(w=>w.x);return Organization(string.Join(" ",words.Select(w=>w.text)));}
         public static Dictionary<string,string> Sections(string text) {
             var result=new Dictionary<string,string>();string t=Regex.Replace(text??"",@"-\s*\r?\n(?=[а-я])","");
@@ -85,6 +85,7 @@ namespace PhotoAudit {
         }
         static int Background(Pixels p,Rectangle rect){var samples=new List<int>();for(int y=rect.Top;y<rect.Bottom;y+=5)for(int x=rect.Left;x<rect.Right;x+=5)samples.Add(p.Grey(x,y));samples.Sort();return samples[(int)(samples.Count*.85)];}
         public static void SaveSignatureCrops(Photo p,string folder) {
+            if(p.Signatures==null||p.Signatures.Count==0)return;
             using(var source=new Bitmap(p.FullImage!=null&&File.Exists(p.FullImage)?p.FullImage:p.Image))using(var im=AdvancedAudit.Resize(source,1400)){
                 double k=im.Width/(double)p.Ocr.width;int n=0;
                 foreach(var s in p.Signatures){var r=Rectangle.Intersect(Rectangle.Round(new RectangleF((float)(s.Bounds.X*k),(float)(s.Bounds.Y*k),(float)(s.Bounds.Width*k),(float)(s.Bounds.Height*k))),new Rectangle(0,0,im.Width,im.Height));if(r.Width>0&&r.Height>0)using(var crop=im.Clone(r,PixelFormat.Format24bppRgb))crop.Save(Path.Combine(folder,"p"+p.Id.ToString("D4")+"-signature-"+n+".jpg"),ImageFormat.Jpeg);n++;}

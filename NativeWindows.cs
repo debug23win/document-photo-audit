@@ -18,8 +18,9 @@ namespace PhotoAudit {
             public readonly OcrEngine Russian=OcrEngine.TryCreateFromLanguage(new Language("ru")),English=OcrEngine.TryCreateFromLanguage(new Language("en"));
             public Engines(){if(Russian==null)throw new InvalidOperationException("В Windows недоступно распознавание русского текста. Установите русский компонент OCR в параметрах языков Windows.");}
         }
-        public static void Recognize(string input,string output,int workers,bool cache,Action<string> progress,CancellationToken cancel) {
-            Directory.CreateDirectory(output);var files=Directory.EnumerateFiles(input).Where(f=>new[]{".jpg",".png"}.Contains(Path.GetExtension(f).ToLowerInvariant())).OrderBy(f=>Path.GetFileName(f),StringComparer.OrdinalIgnoreCase).ToList();int done=0;
+        public static void Recognize(string input,string output,int workers,bool cache,Action<string> progress,CancellationToken cancel) {Recognize(input,output,workers,cache,progress,cancel,null);}
+        public static void Recognize(string input,string output,int workers,bool cache,Action<string> progress,CancellationToken cancel,Func<string,bool> include) {
+            Directory.CreateDirectory(output);var files=Directory.EnumerateFiles(input).Where(f=>new[]{".jpg",".png"}.Contains(Path.GetExtension(f).ToLowerInvariant())&&(include==null||include(f))).OrderBy(f=>Path.GetFileName(f),StringComparer.OrdinalIgnoreCase).ToList();int done=0;
             using(var engines=new ThreadLocal<Engines>(()=>new Engines()))ParallelWork.For(files.Count,workers,cancel,i=>{
                 string file=files[i],target=Path.Combine(output,Path.GetFileNameWithoutExtension(file)+".json");var json=new JavaScriptSerializer{MaxJsonLength=50000000};bool reused=false;
                 if(cache&&File.Exists(target))try{var prior=json.Deserialize<OcrPage>(File.ReadAllText(target,Encoding.UTF8));reused=prior.width>0&&prior.height>0&&prior.lines!=null;}catch{}

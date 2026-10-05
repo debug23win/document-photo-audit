@@ -29,15 +29,16 @@ namespace PhotoAudit {
             for(int x=0;x<pixels.Width;x++){
                 double position=Math.Max(0,Math.Min(nx-1,x/(double)tile-.5));left[x]=(int)position;right[x]=Math.Min(nx-1,left[x]+1);fractions[x]=position-left[x];
             }
+            var rowPaper=new double[nx*3];
             for(int y=0;y<pixels.Height;y++){
                 if(y%32==0)cancel.ThrowIfCancellationRequested();
                 double position=Math.Max(0,Math.Min(ny-1,y/(double)tile-.5));int top=(int)position,bottom=Math.Min(ny-1,top+1);double fy=position-top;
+                for(int i=0;i<rowPaper.Length;i++)rowPaper[i]=(1-fy)*paper[top*nx*3+i]+fy*paper[bottom*nx*3+i];
                 for(int x=0;x<pixels.Width;x++){
                     int at=(y*pixels.Width+x)*3;double fx=fractions[x];
                     for(int channel=0;channel<3;channel++){
-                        double a=paper[(top*nx+left[x])*3+channel],b=paper[(top*nx+right[x])*3+channel];
-                        double c=paper[(bottom*nx+left[x])*3+channel],d=paper[(bottom*nx+right[x])*3+channel];
-                        double background=(1-fy)*(a+(b-a)*fx)+fy*(c+(d-c)*fx);
+                        double a=rowPaper[left[x]*3+channel],b=rowPaper[right[x]*3+channel];
+                        double background=a+(b-a)*fx;
                         double deficit=Math.Max(0,255*(background-pixels.Data[at+channel])/background-3);
                         double ink=deficit<=10?deficit*deficit/10:10+(deficit-10)*2.1;
                         pixels.Data[at+channel]=(byte)Math.Max(0,Math.Min(255,Math.Round(255-ink)));

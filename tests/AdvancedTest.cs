@@ -48,6 +48,7 @@ class AdvancedTest {
         var ambiguous=AdvancedAudit.Consensus("CRC",new[]{Tuple.Create("raw","1234ABCD"),Tuple.Create("contrast","1234ABCE")});Assert(ambiguous.Value==null,"Tied OCR readings must not be resolved from the registry");
         var majority=AdvancedAudit.Consensus("CRC",new[]{Tuple.Create("whole","1234ABCE"),Tuple.Create("raw","1234ABCD"),Tuple.Create("contrast","1234ABCD")});Assert(majority.Value=="1234ABCD"&&majority.Candidates.Count==2,"Independent repeat majority missing");
         Assert(AdvancedAudit.Crc("CRC32: АВСD1234")=="ABCD1234","Hex alphabet normalization failed");
+        Assert(AdvancedAudit.Crc("CRC32: ABC1234")=="0ABC1234"&&AdvancedAudit.Crc("ABC1234")==null,"Labeled short CRC32 values require zero padding; an unlabeled short word is not a checksum");
         var crcReads=new List<Tuple<string,string>>{Tuple.Create("whole","1234ABCD"),Tuple.Create("repeat","1234ABCD")};
         Assert(AdvancedAudit.CrcConsensus(crcReads,new List<Tuple<string,string>>{Tuple.Create("english-raw",(string)null),Tuple.Create("english-contrast",(string)null)}).Value=="1234ABCD","Blank specialized crops must preserve readable page evidence");
         Assert(AdvancedAudit.CrcConsensus(crcReads,new List<Tuple<string,string>>{Tuple.Create("english-raw","1234ABCE"),Tuple.Create("english-contrast","1234ABCF")}).Value==null,"Conflicting readable specialized crops must remain ambiguous");
