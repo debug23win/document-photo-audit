@@ -105,7 +105,7 @@ namespace PhotoAudit {
                 if(marker!=null)boxes["CRC"]=new RectangleF((float)marker.x-20,(float)marker.y-12,Math.Max((float)marker.width*3.5f,w*.19f),Math.Max((float)marker.height*6,h*.07f));
                 else if(p.CRC!=null||p.Book!=null)boxes["CRC"]=new RectangleF(w*.30f,h*.42f,w*.42f,h*.21f);
                 boxes["Footer"]=new RectangleF(w*.65f,h*.82f,w*.35f,h*.18f);
-                if(p.Book!=null||p.CRC!=null)boxes["Revision"]=new RectangleF(w*.76f,h*.145f,w*.24f,h*.185f);
+                var revision=RevisionBounds(p.Ocr);if(revision.HasValue)boxes["Revision"]=revision.Value;
                 boxes["Roles"]=new RectangleF(0,p.Book!=null?h*.56f:h*.07f,w,p.Book!=null?h*.28f:h*.65f);
                 if(p.Book!=null)boxes["Sections"]=new RectangleF(w*.25f,h*.28f,w*.54f,h*.22f);
             } else if(p.Kind.StartsWith("Титул")) {
@@ -160,8 +160,18 @@ namespace PhotoAudit {
             var values=ws.Where(w=>w.y>anchor.y+anchor.height*.5&&w.y<anchor.y+Math.Max(220,anchor.height*6)&&Math.Abs(w.x+w.width/2-cx)<Math.Max(anchor.width*.8,70)&&Regex.IsMatch(N(w.text).Replace('О','0').Replace('O','0').Replace('I','1').Replace('Л','1').Replace('З','3'),@"^[0-9]{1,2}$")).OrderBy(w=>w.y).ToList();
             return values.Count==0?null:N(values[0].text).Replace('О','0').Replace('O','0').Replace('I','1').Replace('Л','1').Replace('З','3');
         }
+        public static RectangleF? RevisionBounds(OcrPage page) {
+            var ws=page.lines.SelectMany(l=>l.words??new List<Word>()).ToList();
+            var label=ws.Where(w=>Regex.IsMatch(N(w.text),@"^ИЗМЕНЕНИ[ЯЙ][.:]?$"))
+                .Where(w=>ws.Any(n=>N(n.text)=="НОМЕР"&&n.y<=w.y+w.height&&n.y>w.y-Math.Max(w.height*5,page.height*.10)&&Math.Abs(n.x+n.width/2-w.x-w.width/2)<Math.Max(w.width*1.5,page.width*.13)))
+                .OrderBy(w=>w.y).FirstOrDefault();if(label==null)return null;
+            float pad=(float)Math.Max(label.height*2,page.width*.025),top=(float)Math.Max(0,label.y-Math.Max(label.height*4,page.height*.04));
+            return RectangleF.Intersect(new RectangleF((float)label.x-pad,top,(float)label.width+pad*2,(float)(label.y+label.height+Math.Max(label.height*7,page.height*.12))-top),new RectangleF(0,0,page.width,page.height));
+        }
         public static string Revision(OcrPage page) {
-            var ws=page.lines.SelectMany(l=>l.words).ToList();var m=ws.Where(w=>Regex.IsMatch(N(w.text),@"^\d{1,2}$")&&w.y>page.height*.30&&w.y<page.height*.85).OrderBy(w=>w.y).FirstOrDefault();return m==null?null:m.text;
+            var bounds=RevisionBounds(page);if(!bounds.HasValue)return null;
+            var ws=page.lines.SelectMany(l=>l.words??new List<Word>()).ToList();var label=ws.Where(w=>Regex.IsMatch(N(w.text),@"^ИЗМЕНЕНИ[ЯЙ][.:]?$")&&bounds.Value.Contains((float)(w.x+w.width/2),(float)(w.y+w.height/2))).OrderBy(w=>w.y).First();
+            var values=ws.Where(w=>w.y>label.y+label.height*.7&&bounds.Value.Contains((float)(w.x+w.width/2),(float)(w.y+w.height/2))&&Regex.IsMatch(N(w.text),@"^\d{1,2}$")).Select(w=>N(w.text)).Distinct().ToList();return values.Count==1?values[0]:null;
         }
         public static List<Word> Map(OcrPage page,CropRequest crop) {
             return page.lines.SelectMany(l=>l.words).Select(w=>new Word{text=w.text,x=crop.Bounds.X+w.x/crop.Scale,y=crop.Bounds.Y+w.y/crop.Scale,width=w.width/crop.Scale,height=w.height/crop.Scale}).ToList();

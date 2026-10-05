@@ -121,7 +121,18 @@ namespace PhotoAudit {
             return candidates.Count>0?(int?)int.Parse(Digits(candidates[0].text)):null;
         }
         static string BookText(Photo p){
-            string s=p.Ocr.text??"";var m=Regex.Match(s,@"Книга\s*\d+[.,]?\s*(?<name>[\s\S]*?)(?=\r?\n\s*(?:\d{3}\s*[-–—]|Том\s*\d|Главный\s|Заместител)|$)",RegexOptions.IgnoreCase);
+            string s=p.Ocr.text??"";
+            if(p.Kind=="ИУЛ"||p.Kind.StartsWith("Титул")){
+                var anchor=p.Words.Where(w=>N(w.text)=="КНИГА"&&w.y>p.Ocr.height*.25).OrderBy(w=>w.y).FirstOrDefault();
+                var end=anchor==null?null:p.Words.Where(w=>N(w.text)=="ТОМ"&&w.y>anchor.y+anchor.height&&w.x>=anchor.x-p.Ocr.width*.03).OrderBy(w=>w.y).FirstOrDefault();
+                if(anchor!=null&&end!=null&&end.y-anchor.y<p.Ocr.height*.25){
+                    var rows=new List<List<Word>>();foreach(var word in p.Words.Where(w=>w.x>=anchor.x-p.Ocr.width*.02&&w.y>=anchor.y-anchor.height*.5&&w.y<end.y-end.height*.25).OrderBy(w=>w.y).ThenBy(w=>w.x)){
+                        var row=rows.FirstOrDefault(r=>Math.Abs(r.Average(w=>w.y+w.height/2)-(word.y+word.height/2))<Math.Max(word.height,r.Average(w=>w.height))*.65);if(row==null){row=new List<Word>();rows.Add(row);}row.Add(word);
+                    }
+                    s=string.Join("\n",rows.OrderBy(r=>r.Average(w=>w.y)).Select(r=>string.Join(" ",r.OrderBy(w=>w.x).Select(w=>w.text))));
+                }
+            }
+            var m=Regex.Match(s,@"Книга\s*\d+[.,]?\s*(?<name>[\s\S]*?)(?=\r?\n\s*(?:\d{3}\s*[-–—]|Том\s*\d|Главный\s|Заместител)|$)",RegexOptions.IgnoreCase);
             if(!m.Success)return null;string value=m.Groups["name"].Value;
             if(p.Kind=="ИУЛ")value=Regex.Split(value,@"\b(?:Том|CRC32|Наименование файла|Алгоритм)\b",RegexOptions.IgnoreCase)[0];
             return Regex.Replace(value,@"\s+"," ").Trim(' ','.');
@@ -175,8 +186,8 @@ namespace PhotoAudit {
             if(p.CRC==null){var marker=p.Words.FirstOrDefault(w=>Compact(w.text).Replace('С','C').Replace('Р','R').StartsWith("CRC32"));if(marker!=null){var candidate=p.Words.Where(w=>Math.Abs(w.x-marker.x)<120&&w.y>=marker.y-8&&w.y<marker.y+80).OrderBy(w=>w.y).Select(w=>Digits(w.text).Replace('С','C').Replace('В','B').Replace('А','A').Replace('Е','E').Trim(',',':',';','•')).FirstOrDefault(s=>Regex.IsMatch(s,@"^[0-9A-F]{8}$"));p.CRC=candidate;}}
             if(p.Kind=="ИУЛ"){
                 p.Page=FooterNumber(p,"ЛИСТ");
-                var rev=p.Words.Where(w=>w.x>p.Ocr.width*.77&&w.y>p.Ocr.height*.15&&w.y<p.Ocr.height*.32&&Regex.IsMatch(Digits(w.text),@"^\d{1,2}$")).OrderBy(w=>w.y).FirstOrDefault();
-                if(rev!=null)p.Revision=int.Parse(Digits(rev.text));
+                int revision;p.Revision=int.TryParse(AdvancedAudit.Revision(p.Ocr),out revision)?(int?)revision:null;
+                if(!AdvancedAudit.RevisionBounds(p.Ocr).HasValue)p.Readings.RemoveAll(reading=>reading.Field=="Revision");
             }
             ApplyReadings(p);if(details)FormAnalysis.Inspect(p,null);return p;
         }
@@ -415,6 +426,7 @@ namespace PhotoAudit {
             foreach(var file in Directory.EnumerateFiles(numbers)){File.Move(file,Path.Combine(crops,Path.GetFileName(file)));}foreach(var file in Directory.EnumerateFiles(numberJson)){File.Move(file,Path.Combine(cropJson,Path.GetFileName(file)));}
             timing.Mark("Объединение чтений");ParallelWork.For(photos.Count,imageWorkers,cancel,i=>{var p=photos[i];var local=cropArray[i];var scanned=new Photo{Id=p.Id,Ocr=p.ScanOcr,Image=p.Image};Parse(scanned,false);
                 foreach(var field in new[]{"CRC","Page","Revision"}) {
+                    if(field=="Revision"&&!AdvancedAudit.RevisionBounds(p.Ocr).HasValue)continue;
                     var reads=new List<Tuple<string,string>>{Tuple.Create("whole-2200",baseline[p.Id][field]),Tuple.Create("whole-3000",uncleanedReadings[i][field]),Tuple.Create("whole-scan-3000",Field(scanned,field))};
                     foreach(var req in local.Where(c=>c.Field==(field=="Page"?"Footer":field)||c.Field==(field=="Page"?"PageCell":field=="Revision"?"RevisionCell":""))) {
                         var ocr=ReadOcr(cropJson,req.File);string value=req.Field=="PageCell"||req.Field=="RevisionCell"?Pagination.Number(ocr.text):field=="CRC"?AdvancedAudit.Crc(ocr.text):field=="Revision"?AdvancedAudit.Revision(ocr):AdvancedAudit.Footer(ocr,"ЛИСТ");reads.Add(Tuple.Create(req.File,value));
