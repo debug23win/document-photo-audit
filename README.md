@@ -57,7 +57,9 @@ CRC сравнивается **по напечатанному тексту ИУ
 
 ## Разработка
 
-C# 5, WinForms, .NET Framework, Windows.Media.Ocr и Windows.Data.Pdf. Для сборки нужен Windows 10/11 SDK с UnionMetadata; для запуска SDK не нужен. Сборка: `powershell -NoProfile -ExecutionPolicy Bypass -File build.ps1 -Version 1.3.0`.
+C# 5, WinForms, .NET Framework, Windows.Media.Ocr и Windows.Data.Pdf. Для сборки нужен Windows 10/11 SDK с UnionMetadata; для запуска SDK не нужен. Сборка: `powershell -NoProfile -ExecutionPolicy Bypass -File build.ps1 -Version 1.3.1`.
+
+Номера в нижнем штампе ИУЛ дополнительно читаются из отдельных цифровых ячеек. Непрочитанный номер не означает, что страница отсутствует: отчёт указывает неопределённость и показывает фрагменты для просмотра. Организация-разработчик определяется по шапке документа, а организация согласующего — по его отдельному блоку. Фамилия согласующего ограничивается этим блоком, чтобы название объекта не попадало в список подписантов. В сообщениях используются названия граф на русском языке; варианты OCR показываются только при наличии прочитанных значений.
 
 Тесты: `tests/test_audit.ps1`, `tests/test_advanced.ps1`, `tests/test_pdf.ps1`, `tests/test_parallel.ps1`, `tests/test_updates.ps1`. GitHub Actions выполняет сборку и все тесты; тег `v1.2.3` выпускает Windows ZIP с контрольной суммой.
 

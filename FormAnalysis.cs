@@ -9,6 +9,8 @@ using System.Text.RegularExpressions;
 namespace PhotoAudit {
     public static class FormAnalysis {
         static string N(string s){return Regex.Replace((s??"").ToUpperInvariant().Replace('Ё','Е'),@"\s+"," ").Trim();}
+        public static string Organization(string text){string value=Regex.Replace(N(text),@"[^А-Я]","");return value.Contains("ЛЕНГИПРОТР")?"Ленгипротранс":value.Contains("РОСЖЕЛДОР")||value.Contains("ГИПР")&&value.Contains("ТРАНСПУТ")?"Росжелдорпроект":value.Contains("ЖЕЛДОРПРОЕКТ")?"Желдорпроект":"Не определено";}
+        public static string DocumentOrganization(OcrPage page){var words=(page.lines??new List<Line>()).SelectMany(l=>l.words??new List<Word>()).Where(w=>w.y<page.height*.17).OrderBy(w=>w.y).ThenBy(w=>w.x);return Organization(string.Join(" ",words.Select(w=>w.text)));}
         public static Dictionary<string,string> Sections(string text) {
             var result=new Dictionary<string,string>();string t=Regex.Replace(text??"",@"-\s*\r?\n(?=[а-я])","");
             var matches=Regex.Matches(t,@"(?<![А-Яа-я])(?<type>Подраздел|Раздел|Часть)\s*(?<number>\d+)\s*[.,:]?\s*(?<name>[\s\S]*?)(?=(?:Подраздел|Раздел|[Ч\[:]асть|[К\[:]нига)\b|[Т•]ом\s*\d|\b\d{3}-\d{2}-\d{4}\b|CRC32|Алгоритм|Наименование файла|Главный|Заместитель|$)",RegexOptions.IgnoreCase);
@@ -29,13 +31,13 @@ namespace PhotoAudit {
                 var a=starts[k];double end=Math.Min(k+1<starts.Count?starts[k+1].y-h*.008:h*.94,a.y+h*.13);
                 var roleWords=ws.Where(t=>t.x<w*(iul?.30:.45)&&t.y>=a.y-h*.006&&t.y<Math.Min(end,a.y+h*.07)).OrderBy(t=>t.y).ThenBy(t=>t.x).ToList();
                 string label=N(string.Join(" ",roleWords.Select(t=>t.text)));
-                bool project=Regex.IsMatch(label,@"(?:^|\s)[ПТ]?РОЕКТ[АВ](?:\s|$)");
-                string role=label.Contains("ИНЖЕНЕР")&&project?"Главный инженер проекта":label.Contains("ЛАВН")&&label.Contains("ИНЖЕНЕР")?"Главный инженер":label.StartsWith("НОРМОКОНТРОЛЬ")?"Нормоконтроль":label.Contains("ЗАМЕСТИТЕЛЬ")?"Заместитель":label.Contains("НАЧАЛЬНИК")?"Начальник":label.Contains("ВЕДУЩИЙ")?"Ведущий инженер":label.Contains("РУКОВОДИТЕЛЬ")?"Руководитель":"Инженер";
-                bool isApproval=approval&&a.y<h*.30;if(isApproval)end=Math.Min(end,a.y+h*.11);double xmin=iul?w*.23:isApproval?w*.22:w*.64,xmax=iul?w*.55:isApproval?w*.75:w;
+                bool project=Regex.IsMatch(label,@"(?:^|\s)[ПТ]?РОЕ(?:КТ[АВ])?(?:\s|$)");
+                string role=label.Contains("ИНЖЕНЕ")&&project?"Главный инженер проекта":label.Contains("ЛАВН")&&label.Contains("ИНЖЕНЕ")?"Главный инженер":label.StartsWith("НОРМОКОНТРОЛЬ")?"Нормоконтроль":label.Contains("ЗАМЕСТИТЕЛЬ")?"Заместитель":label.Contains("НАЧАЛЬНИК")?"Начальник":label.Contains("ВЕДУЩИЙ")?"Ведущий инженер":label.Contains("РУКОВОДИТЕЛЬ")?"Руководитель":"Инженер";
+                bool isApproval=approval&&a.y<h*.30;if(isApproval){end=Math.Min(end,a.y+h*.11);var heading=ws.Where(t=>t.y>a.y&&t.y<h*.45&&Regex.IsMatch(N(t.text),@"^(?:СОЗДАНИЕ|ПРОЕКТНАЯ|РАЗДЕЛ|ВЫСОКОСКОРОСТНОЙ)$")).OrderBy(t=>t.y).FirstOrDefault();if(heading!=null)end=Math.Min(end,heading.y-h*.005);}double xmin=iul?w*.23:isApproval?w*.22:w*.64,xmax=iul?w*.55:isApproval?w*.75:w;
                 var names=ws.Where(t=>t.x>=xmin&&t.x<xmax&&t.y>=a.y+(isApproval?h*.025:-h*.012)&&t.y<end&&Regex.IsMatch(t.text??"",@"^(?:[А-Яа-яЁё][.,]){0,2}[А-Яа-яЁё]{4,}[,.;]?$" )).OrderBy(t=>isApproval?-t.y:t.y).ThenBy(t=>t.x).ToList();
                 if(names.Count>0&&!isApproval){double firstY=names.Min(t=>t.y),height=names.Average(t=>t.height);names=names.Where(t=>t.y<=firstY+height*.75).OrderBy(t=>t.x).ToList();}
-                if(!iul){var anchored=names.Where(t=>Regex.IsMatch(t.text,@"^[А-Яа-яЁё][.,]")||ws.Any(v=>v.x<t.x&&t.x-v.x<w*.15&&Math.Abs(v.y-t.y)<Math.Max(v.height,t.height)*.8&&Regex.IsMatch(v.text??"",@"^(?:[А-Яа-яЁё][.,]){1,2}$"))).ToList();if(anchored.Count>0)names=anchored;}
-                roles.Add(new SignatureCheck{Approval=isApproval,Role=role,Name=names.Count==0?null:N(Regex.Match(names[0].text,@"[А-Яа-яЁё]{4,}").Value),Organization=isApproval&&N(p.Ocr.text).Contains("РОСЖЕЛДОР")?"Росжелдорпроект":p.Organization,Bounds=new RectangleF((float)(iul?w*.55:isApproval?w*.07:w*.30),(float)(a.y-h*.010),(float)(iul?w*.28:isApproval?w*.24:w*.34),(float)(end-a.y+h*.008)),Status="Не определено"});
+                if(!iul){var anchored=names.Where(t=>Regex.IsMatch(t.text,@"^[А-Яа-яЁё][.,]")||ws.Any(v=>v.x<t.x&&t.x-v.x<w*.15&&Math.Abs(v.y-t.y)<Math.Max(v.height,t.height)*.8&&Regex.IsMatch(v.text??"",@"^(?:[А-Яа-яЁё][.,]){1,2}$"))).ToList();if(anchored.Count>0)names=anchored;else if(isApproval)names=names.Where(t=>ws.Any(v=>v.x<t.x&&t.x-v.x<w*.15&&Math.Abs(v.y-t.y)<Math.Max(v.height,t.height)&&Regex.IsMatch(v.text??"",@"^\.?(?:[А-Яа-яЁё][.,]){1,2}$"))).ToList();}
+                roles.Add(new SignatureCheck{Approval=isApproval,Role=role,Name=names.Count==0?null:N(Regex.Match(names[0].text,@"[А-Яа-яЁё]{4,}").Value),Organization=isApproval?Organization(string.Join(" ",ws.Where(t=>t.y>=a.y-h*.01&&t.y<end).Select(t=>t.text))):p.Organization,Bounds=new RectangleF((float)(iul?w*.55:isApproval?w*.07:w*.30),(float)(a.y-h*.010),(float)(iul?w*.28:isApproval?w*.24:w*.34),(float)(end-a.y+h*.008)),Status="Не определено"});
             }
             return roles;
         }

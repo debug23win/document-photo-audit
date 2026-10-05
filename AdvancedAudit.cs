@@ -153,8 +153,8 @@ namespace PhotoAudit {
             var ws=page.lines.SelectMany(l=>l.words).ToList();var labels=ws.Where(w=>N(w.text).Trim('.',':').StartsWith("ЛИСТ")).OrderBy(w=>w.x).ToList();
             var anchor=label=="ЛИСТ"?labels.FirstOrDefault(w=>N(w.text).Trim('.',':')=="ЛИСТ"):labels.FirstOrDefault(w=>N(w.text).Trim('.',':')!="ЛИСТ");if(label=="ЛИСТОВ"&&anchor==null&&labels.Count>=2)anchor=labels.Last();
             if(anchor==null)return null;double cx=anchor.x+anchor.width/2;
-            var values=ws.Where(w=>w.y>anchor.y+anchor.height*.5&&w.y<anchor.y+Math.Max(220,anchor.height*6)&&Math.Abs(w.x+w.width/2-cx)<Math.Max(anchor.width*.8,70)&&Regex.IsMatch(N(w.text).Replace('О','0').Replace('O','0').Replace('I','1').Replace('Л','1'),@"^[0-9]{1,2}$")).OrderBy(w=>w.y).ToList();
-            return values.Count==0?null:N(values[0].text).Replace('О','0').Replace('O','0').Replace('I','1').Replace('Л','1');
+            var values=ws.Where(w=>w.y>anchor.y+anchor.height*.5&&w.y<anchor.y+Math.Max(220,anchor.height*6)&&Math.Abs(w.x+w.width/2-cx)<Math.Max(anchor.width*.8,70)&&Regex.IsMatch(N(w.text).Replace('О','0').Replace('O','0').Replace('I','1').Replace('Л','1').Replace('З','3'),@"^[0-9]{1,2}$")).OrderBy(w=>w.y).ToList();
+            return values.Count==0?null:N(values[0].text).Replace('О','0').Replace('O','0').Replace('I','1').Replace('Л','1').Replace('З','3');
         }
         public static string Revision(OcrPage page) {
             var ws=page.lines.SelectMany(l=>l.words).ToList();var m=ws.Where(w=>Regex.IsMatch(N(w.text),@"^\d{1,2}$")&&w.y>page.height*.30&&w.y<page.height*.85).OrderBy(w=>w.y).FirstOrDefault();return m==null?null:m.text;
