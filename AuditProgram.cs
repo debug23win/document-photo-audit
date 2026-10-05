@@ -41,6 +41,7 @@ namespace PhotoAudit {
         readonly Label counts=new Label();readonly List<Button> editing=new List<Button>();CancellationTokenSource token;bool busy;string report;
         readonly ComboBox parallel=new ComboBox{DropDownStyle=ComboBoxStyle.DropDownList,Width=95};
         public AuditForm(){
+            Icon=Icon.ExtractAssociatedIcon(typeof(AuditForm).Assembly.Location);
             Text="Автопроверка документов — изображения и PDF";Font=new Font("Segoe UI",10);ClientSize=new Size(1030,805);MinimumSize=new Size(950,810);StartPosition=FormStartPosition.CenterScreen;BackColor=Color.FromArgb(246,248,250);AllowDrop=true;
             var grid=new TableLayoutPanel{Dock=DockStyle.Fill,Padding=new Padding(24),ColumnCount=1,RowCount=12};Controls.Add(grid);
             float[] fixedRows={44,45,40,0,40,30,42,42,60,26,0,50};for(int i=0;i<fixedRows.Length;i++)grid.RowStyles.Add(new RowStyle(fixedRows[i]==0?SizeType.Percent:SizeType.Absolute,fixedRows[i]==0?50:fixedRows[i]));
@@ -92,6 +93,7 @@ namespace PhotoAudit {
     }
     public sealed class InventoryPreviewForm:Form {
         public InventoryPreviewForm(InventoryPreview preview){
+            Icon=Icon.ExtractAssociatedIcon(typeof(AuditForm).Assembly.Location);
             Text="Опись — перед основной проверкой";Font=new Font("Segoe UI",11);ClientSize=new Size(610,265);FormBorderStyle=FormBorderStyle.FixedDialog;MaximizeBox=false;MinimizeBox=false;StartPosition=FormStartPosition.CenterParent;Padding=new Padding(24);
             var grid=new TableLayoutPanel{Dock=DockStyle.Fill,ColumnCount=1,RowCount=4};grid.RowStyles.Add(new RowStyle(SizeType.Absolute,48));grid.RowStyles.Add(new RowStyle(SizeType.Absolute,54));grid.RowStyles.Add(new RowStyle(SizeType.Percent,100));grid.RowStyles.Add(new RowStyle(SizeType.Absolute,42));Controls.Add(grid);
             grid.Controls.Add(new Label{Text="Найдено страниц описи: "+preview.Pages,Font=new Font("Segoe UI",18,FontStyle.Bold),Dock=DockStyle.Fill},0,0);
