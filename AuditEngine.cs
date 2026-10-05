@@ -53,6 +53,7 @@ namespace PhotoAudit {
             var m=Regex.Match(c,@"(?<p>\d{3}-\d{2}-\d{4})-И[.]?[ЛJI1Ј][ОO0](?<s>[34ЗЧ]\.[0-9ЗОOLIЛНБ]{1,2}\.[0-9ЗОOLIЛНБ]{1,2})(?![0-9ЗОOLIЛНБ])");
             return m.Success?m.Groups["p"].Value+"-ИЛО"+Digits(m.Groups["s"].Value):null;
         }
+        public static string DocumentCode(string text){return FindCode(text);}
         static string PageCode(string s){
             var prefix=Regex.Match(Compact(s),@"\d{3}-\d{2}-\d{4}");
             var tom=Regex.Match(N(s),@"\bТОМ\s*(?<v>4\s*\.\s*[34ЗЧ]\s*\.\s*[0-9ЗОOLIЛНБ]{1,2}\s*\.\s*[0-9ЗОOLIЛНБ]{1,2})(?![0-9ЗОOLIЛНБ])");

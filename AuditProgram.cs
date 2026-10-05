@@ -37,7 +37,8 @@ namespace PhotoAudit {
         readonly HashSet<string> inventoryInputs=new HashSet<string>(StringComparer.OrdinalIgnoreCase);readonly Label inventoryStatus=new Label();
         readonly CheckBox adaptive=new CheckBox{Text="Ускорять уверенно прочитанные поля",Checked=true,AutoSize=true,Padding=new Padding(8,5,0,0)};
         readonly TextBox registry=new TextBox(),output=new TextBox();readonly RichTextBox log=new RichTextBox();
-        readonly ProgressBar bar=new ProgressBar();readonly Button run=new Button(),cancel=new Button(),open=new Button();
+        readonly ProgressBar bar=new ProgressBar();readonly Button run=new Button(),cancel=new Button(),open=new Button(),summary=new Button();
+        AuditResult lastResult;DateTime completedAt;string lastRegistry;
         readonly Label counts=new Label();readonly List<Button> editing=new List<Button>();CancellationTokenSource token;bool busy;string report;
         readonly ComboBox parallel=new ComboBox{DropDownStyle=ComboBoxStyle.DropDownList,Width=95};
         public AuditForm(){
@@ -59,6 +60,7 @@ namespace PhotoAudit {
             run.Text="Проверить";run.Width=155;run.Height=33;run.BackColor=Color.FromArgb(35,69,100);run.ForeColor=Color.White;run.FlatStyle=FlatStyle.Flat;run.Click+=(s,e)=>Start();bottom.Controls.Add(run);
             cancel.Text="Отмена";cancel.Width=100;cancel.Height=33;cancel.Enabled=false;cancel.Click+=(s,e)=>{if(token!=null)token.Cancel();cancel.Enabled=false;};bottom.Controls.Add(cancel);
             open.Text="Открыть отчёт";open.Width=155;open.Height=33;open.Enabled=false;open.Click+=(s,e)=>{if(File.Exists(report))Process.Start(new ProcessStartInfo(report){UseShellExecute=true});};bottom.Controls.Add(open);
+            summary.Text="Заполнить свод…";summary.Width=170;summary.Height=33;summary.Enabled=false;summary.Click+=(s,e)=>FillSummary(false);bottom.Controls.Add(summary);
             counts.AutoSize=true;counts.Padding=new Padding(0,6,10,0);counts.Text="Файлы не выбраны";bottom.Controls.Add(counts);grid.Controls.Add(bottom,0,11);
             DragEnter+=(s,e)=>{if(!busy&&e.Data.GetDataPresent(DataFormats.FileDrop))e.Effect=DragDropEffects.Copy;};DragDrop+=(s,e)=>{if(!busy)foreach(string p in (string[])e.Data.GetData(DataFormats.FileDrop))AddFile(p);};
             FormClosing+=(s,e)=>{if(busy){e.Cancel=true;if(token!=null)token.Cancel();Append("Запрошена отмена. Дождитесь завершения текущего распознавания.");}};
@@ -80,13 +82,18 @@ namespace PhotoAudit {
         void RefreshInputs(){list.Items.Clear();foreach(var p in inputs)list.Items.Add((inventoryInputs.Contains(p)?"[Опись] ":"")+p);counts.Text="Выбрано: "+inputs.Count;inventoryStatus.Text="Файлов описи указано вручную: "+inventoryInputs.Count+". Число страниц будет определено перед проверкой.";}
         void Append(string s){log.AppendText("\n"+s);log.SelectionStart=log.TextLength;log.ScrollToCaret();}
         void Ui(Action action){if(!IsDisposed&&IsHandleCreated)BeginInvoke(action);}
-        void SetBusy(bool value){busy=value;run.Enabled=!value;cancel.Enabled=value;open.Enabled=!value&&report!=null;registry.Enabled=!value;output.Enabled=!value;list.Enabled=!value;parallel.Enabled=!value;adaptive.Enabled=!value;foreach(var b in editing)b.Enabled=!value;}
+        void SetBusy(bool value){busy=value;run.Enabled=!value;cancel.Enabled=value;open.Enabled=!value&&report!=null;summary.Enabled=!value&&lastResult!=null;registry.Enabled=!value;output.Enabled=!value;list.Enabled=!value;parallel.Enabled=!value;adaptive.Enabled=!value;foreach(var b in editing)b.Enabled=!value;}
+        void FillSummary(bool ask){
+            if(lastResult==null)return;
+            if(ask&&MessageBox.Show(this,"Проверка завершена. Заполнить сводную таблицу?","Проверка завершена",MessageBoxButtons.YesNo,MessageBoxIcon.Question)!=DialogResult.Yes)return;
+            using(var dialog=new SummaryFillForm(lastResult,lastRegistry,completedAt))if(dialog.ShowDialog(this)==DialogResult.OK)Append("Сводная таблица: "+dialog.SavedPath);
+        }
         void Start(){
             if(inputs.Count==0){MessageBox.Show(this,"Добавьте фотографии, PDF или ZIP.",Text);return;}
             if(registry.Text!=""&&!File.Exists(registry.Text)){MessageBox.Show(this,"Реестр Excel не найден.",Text);return;}
             string dest;try{dest=Path.Combine(Path.GetFullPath(output.Text),"Проверка_"+DateTime.Now.ToString("yyyyMMdd_HHmmss_fff"));}catch(Exception ex){MessageBox.Show(this,ex.Message,Text);return;}
             var selected=inputs.ToList();var manual=inventoryInputs.ToList();bool fast=adaptive.Checked;string reference=registry.Text;int workers=parallel.SelectedIndex==0?0:int.Parse(Convert.ToString(parallel.SelectedItem));token=new CancellationTokenSource();SetBusy(true);bar.Value=0;Append("Предварительный поиск страниц описи.");
-            var worker=new Thread(()=>{try{var result=AuditEngine.Run(selected,reference,dest,(p,s)=>Ui(()=>{bar.Value=Math.Min(100,p);Append(s);}),token.Token,workers,manual,preview=>{bool proceed=false;Invoke(new Action(()=>{inventoryStatus.Text="Найдено страниц описи: "+preview.Pages+"; автоматически: "+preview.AutomaticPages+"; вручную: "+preview.ManualPages;using(var dialog=new InventoryPreviewForm(preview))proceed=dialog.ShowDialog(this)==DialogResult.OK;if(proceed)Append("Начата основная проверка.");}));return proceed;},fast);Ui(()=>{report=result.Report;Append("Отчёт: "+report);inventoryStatus.Text="Страниц описи в отчёте: "+result.InventoryPages;counts.Text="Фото: "+result.Images+"; пунктов: "+result.Findings.Count;SetBusy(false);token.Dispose();token=null;});}
+            var worker=new Thread(()=>{try{var result=AuditEngine.Run(selected,reference,dest,(p,s)=>Ui(()=>{bar.Value=Math.Min(100,p);Append(s);}),token.Token,workers,manual,preview=>{bool proceed=false;Invoke(new Action(()=>{inventoryStatus.Text="Найдено страниц описи: "+preview.Pages+"; автоматически: "+preview.AutomaticPages+"; вручную: "+preview.ManualPages;using(var dialog=new InventoryPreviewForm(preview))proceed=dialog.ShowDialog(this)==DialogResult.OK;if(proceed)Append("Начата основная проверка.");}));return proceed;},fast);var finished=DateTime.Now;Ui(()=>{report=result.Report;lastResult=result;completedAt=finished;lastRegistry=reference;Append("Отчёт: "+report);inventoryStatus.Text="Страниц описи в отчёте: "+result.InventoryPages;counts.Text="Фото: "+result.Images+"; пунктов: "+result.Findings.Count;SetBusy(false);token.Dispose();token=null;FillSummary(true);});}
                 catch(OperationCanceledException){Ui(()=>{Append("Проверка отменена. Частичные данные сохранены в папке запуска.");SetBusy(false);token.Dispose();token=null;});}
                 catch(Exception ex){string errorLog=AuditProgram.LogError(ex,dest);Ui(()=>{Append("Ошибка: "+ex.Message+"\nЖурнал: "+errorLog);SetBusy(false);token.Dispose();token=null;MessageBox.Show(this,ex.Message,"Не удалось выполнить проверку",MessageBoxButtons.OK,MessageBoxIcon.Error);});}});worker.IsBackground=true;worker.SetApartmentState(ApartmentState.STA);worker.Start();
         }
