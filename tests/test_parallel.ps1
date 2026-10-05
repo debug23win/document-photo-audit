@@ -1,4 +1,4 @@
-﻿$ErrorActionPreference='Stop'
+$ErrorActionPreference='Stop'
 $root=Split-Path -Parent $PSScriptRoot
 $temp=Join-Path ([IO.Path]::GetTempPath()) ('audit-parallel-tests-'+[guid]::NewGuid().ToString('N'))
 [IO.Directory]::CreateDirectory($temp)|Out-Null

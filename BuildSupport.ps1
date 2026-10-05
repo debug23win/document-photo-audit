@@ -1,4 +1,4 @@
-﻿function Get-NativeWindowsReferences {
+function Get-NativeWindowsReferences {
     $framework=Join-Path $env:WINDIR 'Microsoft.NET/Framework64/v4.0.30319'
     if(!(Test-Path -LiteralPath $framework)){$framework=Join-Path $env:WINDIR 'Microsoft.NET/Framework/v4.0.30319'}
     foreach($name in @('System.Runtime','System.Runtime.InteropServices.WindowsRuntime','System.ObjectModel')) {

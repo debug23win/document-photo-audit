@@ -1,4 +1,4 @@
-﻿param([string]$InputDirectory,[Parameter(Mandatory=$true)][string]$OutputDirectory,[string]$PdfInput,[ValidateRange(1,1000)][int]$MaxPages=1000,[switch]$UseCache,[ValidateRange(0,8)][int]$Workers=0)
+param([string]$InputDirectory,[Parameter(Mandatory=$true)][string]$OutputDirectory,[string]$PdfInput,[ValidateRange(1,1000)][int]$MaxPages=1000,[switch]$UseCache,[ValidateRange(0,8)][int]$Workers=0)
 # Compatibility entry point for older packages and developer tests.
 # The graphical application uses NativeWindows directly and never launches PowerShell.
 $ErrorActionPreference='Stop'

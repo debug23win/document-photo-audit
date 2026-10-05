@@ -6,7 +6,31 @@ using PhotoAudit;
 class AdvancedTest {
     static void Assert(bool ok,string message){if(!ok)throw new Exception(message);}
     static Word W(string s,double x,double y,double width){return new Word{text=s,x=x,y=y,width=width,height=25};}
+    static void ScannerTest(){
+        using(var source=new Bitmap(384,576)){
+            for(int y=0;y<source.Height;y++)for(int x=0;x<source.Width;x++){
+                int paper=145+x*75/source.Width+(int)(7*Math.Sin(y/100.0));int noise=y>=50&&y<=70?0:(x*17+y*13)%5-2;
+                source.SetPixel(x,y,Color.FromArgb(paper+12+noise,paper+noise,paper-9+noise));
+            }
+            using(var g=Graphics.FromImage(source)){g.FillRectangle(Brushes.Black,80,140,120,3);using(var faint=new SolidBrush(Color.FromArgb(135,123,114)))g.FillRectangle(faint,160,250,60,4);using(var pen=new Pen(Color.FromArgb(30,55,140),3))g.DrawLines(pen,new[]{new Point(80,420),new Point(100,380),new Point(125,430),new Point(150,395),new Point(180,415)});}
+            using(var clean=DocumentScan.Enhance(source)){
+                Assert(clean.Size==source.Size,"Scanner must preserve pixel dimensions");var raw=new Pixels(source);var result=new Pixels(clean);
+                double before=0,after=0;int samples=0;
+                for(int y=25;y<110;y+=3)for(int x=35;x<350;x+=3){before+=raw.Grey(x,y);after+=result.Grey(x,y);samples++;}
+                Assert(after/samples>244&&after-before>samples*45,"Shadowed warm paper was not cleaned");
+                Assert(result.Grey(100,141)<12,"Thin black text/table lines must survive cleaning");
+                Assert(result.Grey(180,245)-result.Grey(180,251)>raw.Grey(180,245)-raw.Grey(180,251)+10,"Faint ink contrast was not increased");
+                Assert(result.Blue(100,382),"Colour signature ink must survive cleaning");
+                for(int x=93;x<=99;x++)Assert(Math.Abs(result.Grey(x,60)-result.Grey(x+1,60))<9,"Background interpolation left a tile seam");
+            }
+            using(var grey=DocumentScan.Enhance(source,false))Assert(grey.GetPixel(100,382).R==grey.GetPixel(100,382).B,"Grayscale OCR variant is not neutral");
+            var stop=new System.Threading.CancellationTokenSource();stop.Cancel();bool cancelled=false;try{using(var ignored=DocumentScan.Enhance(source,true,stop.Token)){} }catch(OperationCanceledException){cancelled=true;}Assert(cancelled,"Scanner must honor cancellation");
+            Assert(source.GetPixel(100,141).R==0,"Cleaning must not modify the supplied bitmap");
+        }
+        using(var tiny=new Bitmap(1,1)){tiny.SetPixel(0,0,Color.White);using(var clean=DocumentScan.Enhance(tiny))Assert(clean.GetPixel(0,0).R==255,"Tiny image handling failed");}
+    }
     static int Main() {
+        ScannerTest();
         var ambiguous=AdvancedAudit.Consensus("CRC",new[]{Tuple.Create("raw","1234ABCD"),Tuple.Create("contrast","1234ABCE")});Assert(ambiguous.Value==null,"Tied OCR readings must not be resolved from the registry");
         var majority=AdvancedAudit.Consensus("CRC",new[]{Tuple.Create("whole","1234ABCE"),Tuple.Create("raw","1234ABCD"),Tuple.Create("contrast","1234ABCD")});Assert(majority.Value=="1234ABCD"&&majority.Candidates.Count==2,"Independent repeat majority missing");
         Assert(AdvancedAudit.Crc("CRC32: АВСD1234")=="ABCD1234","Hex alphabet normalization failed");

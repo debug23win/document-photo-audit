@@ -127,11 +127,7 @@ namespace PhotoAudit {
             }return requests;
         }
         static void SaveCrop(Bitmap bitmap,string path){if(path.EndsWith(".png")){bitmap.Save(path,ImageFormat.Png);return;}var codec=ImageCodecInfo.GetImageEncoders().First(c=>c.MimeType=="image/jpeg");using(var options=new EncoderParameters(1)){options.Param[0]=new EncoderParameter(Encoder.Quality,99L);bitmap.Save(path,codec,options);}}
-        public static Bitmap Normalize(Bitmap source) {
-            var p=new Pixels(source);int tile=64;int nx=(p.Width+tile-1)/tile,ny=(p.Height+tile-1)/tile;var backgrounds=new int[nx*ny];
-            for(int yy=0;yy<ny;yy++)for(int xx=0;xx<nx;xx++){var values=new List<int>();for(int y=yy*tile;y<Math.Min(p.Height,(yy+1)*tile);y+=3)for(int x=xx*tile;x<Math.Min(p.Width,(xx+1)*tile);x+=3)values.Add(p.Grey(x,y));values.Sort();backgrounds[yy*nx+xx]=Math.Max(80,values[(int)(values.Count*.85)]);}
-            for(int y=0;y<p.Height;y++)for(int x=0;x<p.Width;x++){int grey=p.Grey(x,y),bg=backgrounds[(y/tile)*nx+x/tile],v=Math.Max(0,Math.Min(255,255-(bg-grey)*3));int i=(y*p.Width+x)*3;p.Data[i]=p.Data[i+1]=p.Data[i+2]=(byte)v;}return p.Bitmap();
-        }
+        public static Bitmap Normalize(Bitmap source) { return DocumentScan.Enhance(source,false); }
         public static Reading Consensus(string field,IEnumerable<Tuple<string,string>> reads) {
             var valid=reads.Where(r=>!string.IsNullOrWhiteSpace(r.Item2)).ToList();var result=new Reading{Field=field,Attempts=reads.Count(),Status="Не распознано"};
             var groups=valid.GroupBy(r=>r.Item2).OrderByDescending(g=>g.Count()).ToList();result.Candidates=groups.Select(g=>g.Key).ToList();result.Sources=valid.Select(r=>r.Item1+": "+r.Item2).ToList();
