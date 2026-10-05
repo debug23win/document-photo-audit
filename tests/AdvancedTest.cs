@@ -39,10 +39,6 @@ class AdvancedTest {
         ScannerTest();DigitShapeTest();
         Assert(Pagination.Number("Лист 1")=="1"&&Pagination.Number("Лист З")=="3","Digit-cell OCR normalization failed");
         Assert(Pagination.Number("Лист")==null&&Pagination.Number("1 3")==null&&Pagination.Number("Лист 0")==null,"Empty/ambiguous numeric cells must not fabricate a number");
-        var partial=new List<Photo>{new Photo{Id=1,Page=null,Pages=3},new Photo{Id=2,Page=2},new Photo{Id=3,Page=3}};
-        Assert(Pagination.Check("test",partial)[0].Detail.Contains("отсутствие не установлено"),"Unread numbering must not imply an absent sheet");
-        partial[0].Page=1;Assert(Pagination.Check("test",partial).Count==0,"Complete numbering was flagged");
-        partial.RemoveAt(0);partial[0].Pages=3;Assert(Pagination.Check("test",partial)[0].Topic.Contains("пропуск"),"Readable missing sheet must still be flagged");
         var ownHeader=new OcrPage{width=1000,height=2000,lines=new List<Line>{new Line{words=new List<Word>{W("ЖЕЛДОР",100,50,160),W("ПРОЕКТ",100,100,160),W("Росжелдорпроект",300,440,250)}}}};
         Assert(FormAnalysis.DocumentOrganization(ownHeader)=="Желдорпроект","Approval organization must not override the document owner");
         var approvalPhoto=new Photo{Kind="Титул",Organization="Ленгипротранс",Ocr=new OcrPage{width=1000,height=2000,text="СОГЛАСОВАНО",lines=new List<Line>()},Words=new List<Word>{W("Главный",70,400,90),W("инженер",180,400,90),W("проекта",280,400,80),W("Гипротранспуть",70,460,190),W("П.И.",270,520,55),W("Иванов",335,520,110),W("СОЗДАНИЕ",250,580,200),W("МАГИСТРАЛИ",350,600,220)}};

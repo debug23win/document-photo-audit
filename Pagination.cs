@@ -19,7 +19,7 @@ namespace PhotoAudit {
             if(labels.Count==0)return result;
             using(var source=new Bitmap(Path.Combine(folder,footer.File)))for(int index=0;index<Math.Min(2,labels.Count);index++){
                 var label=labels[index];string field=index==0&&Regex.IsMatch(label.text,@"^Лист[.:]?$",RegexOptions.IgnoreCase)?"PageCell":"PagesCell";
-                if(index==0&&labels.Count==1&&field!="PageCell"&&!Regex.IsMatch(label.text,@"^Лист(?:ов|ол|с)$",RegexOptions.IgnoreCase))continue;
+                if(field!="PageCell")continue;
                 int width=Math.Max(120,(int)(label.width*2.1)),height=Math.Max(140,(int)(label.height*4));
                 var area=Rectangle.Intersect(new Rectangle((int)(label.x+label.width/2-width/2),(int)(label.y+label.height+8),width,height),new Rectangle(0,0,source.Width,source.Height));
                 if(area.Width<30||area.Height<30)continue;
@@ -70,17 +70,6 @@ namespace PhotoAudit {
                     }
                 }return output;
             }
-        }
-        public static List<Finding> Check(string code,List<Photo> sheets){
-            var result=new List<Finding>();var totals=sheets.Where(p=>p.Pages.HasValue).Select(p=>p.Pages.Value).Distinct().ToList();
-            if(totals.Count>1){result.Add(new Finding{Level="Проверить",Code=code,Topic="Разное количество листов ИУЛ",Detail="В графе «Листов» прочитаны разные значения: "+string.Join(", ",totals)+". Проверьте нижние штампы."});}
-            else if(totals.Count==1&&totals[0]>=1&&totals[0]<=1000){
-                var found=sheets.Where(p=>p.Page.HasValue).Select(p=>p.Page.Value).Distinct().ToList();var missing=Enumerable.Range(1,totals[0]).Where(n=>!found.Contains(n)).ToList();
-                if(missing.Count>0){int unknown=sheets.Count(p=>!p.Page.HasValue);string numbers=string.Join(", ",missing);
-                    result.Add(new Finding{Level="Проверить",Code=code,Topic=unknown>0?"Нумерация ИУЛ требует проверки":"Возможный пропуск листов ИУЛ",Detail=unknown>0?"Номер не прочитан или спорный на "+unknown+" загруженных листах ИУЛ. Не подтверждены номера: "+numbers+". Эти листы могут уже присутствовать среди фотографий; отсутствие не установлено.":"По прочитанным графам «Лист» не представлены номера: "+numbers+" из "+totals[0]+". Проверьте комплект и распознанные номера."});
-                }
-            }
-            foreach(var item in result)item.Photos.AddRange(sheets.Select(p=>p.Id));return result;
         }
     }
 }
