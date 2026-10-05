@@ -17,7 +17,7 @@ class RecheckTest {
     static int Main(){
         string temp=Path.Combine(Path.GetTempPath(),"recheck-tests-"+Guid.NewGuid().ToString("N")),source=Path.Combine(temp,"source"),assets=Path.Combine(source,"assets");Directory.CreateDirectory(assets);var json=new JavaScriptSerializer{MaxJsonLength=50000000};
         for(int id=1;id<=2;id++){string stem="p"+id.ToString("D4");using(var image=new Bitmap(800,1100))using(var graphics=Graphics.FromImage(image)){graphics.Clear(Color.White);image.Save(Path.Combine(assets,stem+".jpg"),System.Drawing.Imaging.ImageFormat.Jpeg);}File.WriteAllText(Path.Combine(assets,stem+".json"),json.Serialize(Ocr(stem+".jpg","Текст без шифра "+id)),Encoding.UTF8);}
-        File.WriteAllText(Path.Combine(source,"Результаты.json"),json.Serialize(new{Photos=new[]{new Photo{Id=1,Original="absent.pdf / page 1",Kind="Не определено"},new Photo{Id=2,Original="absent.pdf / page 2",Kind="Не определено"}}}),Encoding.UTF8);
+        File.WriteAllText(Path.Combine(source,"Результаты.json"),json.Serialize(new{Photos=new[]{new Photo{Id=1,Original="absent.pdf / page 1",Kind="Не определено",InventoryOverride=false},new Photo{Id=2,Original="absent.pdf / page 2",Kind="Не определено",InventoryOverride=true}}}),Encoding.UTF8);
         var hashes=Directory.GetFiles(source,"*",SearchOption.AllDirectories).ToDictionary(f=>f,Hash);
         var loaded=Recheck.Load(Path.Combine(source,"Результаты.json"));Assert(loaded.Count==2,"Load cached pages without original PDF");
         var cached=Recheck.Run(source,null,Path.Combine(temp,"cached"),new List<int>(),false,null,CancellationToken.None,1,(a,b,c,d,e,f)=>{throw new Exception("Cached mode invoked OCR");});
@@ -30,6 +30,7 @@ class RecheckTest {
         Assert(Hash(Path.Combine(assets,"p0002.json"))==Hash(Path.Combine(selected.Directory,"assets","p0002.json")),"Unselected OCR copied byte for byte");
         foreach(var pair in hashes)Assert(File.Exists(pair.Key)&&Hash(pair.Key)==pair.Value,"Source report unchanged");
         Assert(Recheck.Load(selected.Directory)[0].Code=="123-45-6789-ТКР12.1","A repeated report can be loaded again");
+        var roundtrip=Recheck.Load(selected.Directory);Assert(roundtrip[0].InventoryOverride==false&&roundtrip[1].InventoryOverride==true&&roundtrip[1].Kind=="Опись","Explicit inclusion and exclusion of inventory pages survive selective OCR and report round-trip");
         Reject(()=>Recheck.Run(source,null,Path.Combine(temp,"none"),new int[0],true,null,CancellationToken.None),"Empty selection must fail");
         Reject(()=>Recheck.Run(source,null,Path.Combine(temp,"bad"),new[]{3},true,null,CancellationToken.None),"Missing page must fail");
         Reject(()=>Recheck.Run(source,null,source,new[]{1},true,null,CancellationToken.None),"Cannot overwrite source");

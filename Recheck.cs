@@ -65,7 +65,7 @@ namespace PhotoAudit {
                     if(readings.Any(r=>r.Ocr==null||r.Ocr.lines==null||r.Ocr.width<1||r.Ocr.height<1))throw new InvalidDataException("Некорректный результат повторного OCR страницы "+old.Id);
                     var best=readings.OrderByDescending(r=>AuditEngine.Score(r.Ocr)).ThenByDescending(r=>r.Name.Contains("processed")).First();
                     string color=best.Name.EndsWith("-scan.png",StringComparison.OrdinalIgnoreCase)?(candidates[old.Id].Contains(stem+"-processed.jpg")?stem+"-processed.jpg":stem+".jpg"):best.Name;
-                    var p=new Photo{Id=old.Id,Original=old.Original,ManualInventory=old.ManualInventory,Ocr=best.Ocr,Image=Path.Combine(assets,color),ImageFile=color,ProcessingNote=(old.ProcessingNote??"")+"; повторное OCR выбранной страницы"};photos[i]=p;
+                    var p=new Photo{Id=old.Id,Original=old.Original,ManualInventory=old.ManualInventory,InventoryOverride=old.InventoryOverride,Ocr=best.Ocr,Image=Path.Combine(assets,color),ImageFile=color,ProcessingNote=(old.ProcessingNote??"")+"; повторное OCR выбранной страницы"};photos[i]=p;
                     File.WriteAllText(Path.Combine(assets,stem+".json"),json.Serialize(p.Ocr),new UTF8Encoding(false));
                     var scan=readings.FirstOrDefault(r=>r.Name.EndsWith("-scan.png",StringComparison.OrdinalIgnoreCase));if(scan!=null)File.WriteAllText(Path.Combine(assets,stem+"-scan.json"),json.Serialize(scan.Ocr),new UTF8Encoding(false));
                     // Old crop readings and coordinates must not override fresh whole-page OCR.

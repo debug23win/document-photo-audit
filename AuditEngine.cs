@@ -20,7 +20,7 @@ namespace PhotoAudit {
     public sealed class Line {public string text;public List<Word> words;}
     public sealed class OcrPage {public string file,text,language;public int width,height;public List<Line> lines;}
     public sealed class Photo {
-        public int Id;public string Original,Image,Kind,Code,Tom,Organization,Book,Chief;public string CRC;public int? Revision,Page,Pages;public bool ManualInventory;
+        public int Id;public string Original,Image,Kind,Code,Tom,Organization,Book,Chief;public string CRC;public int? Revision,Page,Pages;public bool ManualInventory;public bool? InventoryOverride;
         public OcrPage Ocr,ScanOcr;public string ScanImage;public List<Word> Words;public int Ink;public int SignatureRows,RowsWithoutBlue;
         public string FullImage,ImageFile,ProcessingNote,SectionText,KindHint,CodeHint,OrganizationHint;public List<Word> DetailWords;
         public List<Reading> Readings=new List<Reading>();public List<SignatureCheck> Signatures=new List<SignatureCheck>();
@@ -40,7 +40,20 @@ namespace PhotoAudit {
     }
     public sealed class InventoryPreview {
         public int Images,AutomaticPages,ManualPages;
+        public List<InventoryPreviewPage> Items=new List<InventoryPreviewPage>();
         public int Pages {get{return AutomaticPages+ManualPages;}}
+        public void Refresh(){Images=Items.Count;ManualPages=Items.Count(p=>p.Selected&&(p.Manual||!p.Automatic));AutomaticPages=Items.Count(p=>p.Selected&&p.Automatic&&!p.Manual);}
+        public void Apply(IList<Photo> photos){
+            if(Items.Count!=photos.Count||Items.Select(p=>p.Id).Distinct().Count()!=photos.Count||Items.Any(p=>!photos.Any(v=>v.Id==p.Id)))throw new InvalidDataException("Список выбранных страниц описи не соответствует загруженным страницам.");
+            var choices=Items.ToDictionary(p=>p.Id);foreach(var p in photos){var choice=choices[p.Id];p.InventoryOverride=choice.Selected;p.ManualInventory=choice.Selected&&(choice.Manual||!choice.Automatic);}Refresh();
+        }
+    }
+    public sealed class InventoryPreviewPage {public int Id;public string Original,Image;public bool Automatic,Manual,Selected;}
+    public sealed class InventoryReviewGate:IDisposable {
+        readonly ManualResetEventSlim ready=new ManualResetEventSlim(false);bool proceed;
+        public void Complete(bool start){proceed=start;ready.Set();}
+        public bool Wait(CancellationToken cancel){ready.Wait(cancel);return proceed;}
+        public void Dispose(){ready.Dispose();}
     }
     public static class AuditEngine {
         static readonly CultureInfo Inv=CultureInfo.InvariantCulture;
@@ -149,13 +162,13 @@ namespace PhotoAudit {
         static Photo Parse(Photo p,bool details=true){
             string n=N(p.Ocr.text),c=Compact(p.Ocr.text);p.Words=Words(p.Ocr);bool strongCode;string explicitCode=DocumentIdentity.FieldCode(p.Ocr,p.Image,out strongCode),legacyCode=PageCode(p.Ocr.text);
             bool inlineCode=Regex.IsMatch(p.Ocr.text??"",@"(?:Обозначение\s+документа|Шифр(?:\s+(?:документа|тома))?)\s*[:=]",RegexOptions.IgnoreCase);if(explicitCode!=null&&(inlineCode||legacyCode==null||!explicitCode.Contains(" ")&&DocumentIdentity.Key(explicitCode).Contains(DocumentIdentity.Key(legacyCode))))p.Code=CodeValue(explicitCode);else p.Code=legacyCode??DocumentIdentity.TitleCode(p.Ocr)??p.CodeHint;p.Tom=Tom(p.Code);
-            if(p.ManualInventory||IsInventory(p.Ocr)){p.Kind="Опись";p.Code=null;p.Tom=null;}
+            if(p.InventoryOverride??(p.ManualInventory||IsInventory(p.Ocr))){p.Kind="Опись";p.Code=null;p.Tom=null;}
             else if(c.Replace('С','C').Replace('Р','R').Contains("CRC32")||c.Contains("УДОСТОВЕРЯЮЩ")||c.Contains("УДОСТОВЕРЯЮШ")||((n.Contains("КОНТРОЛЬНАЯ")||n.Contains("CRC32"))&&n.Contains("ЛИСТ"))||c.Contains("-УЛ"))p.Kind="ИУЛ";
             else if(n.Contains("ФРАГМЕНТ"))p.Kind="Титул фрагмента";
             else if(n.Contains("КНИГА")&&p.Code!=null)p.Kind="Титул";else p.Kind="Не определено";
             p.Organization=FormAnalysis.DocumentOrganization(p.Ocr);
-            if(p.Kind=="Не определено"&&p.KindHint!=null)p.Kind=p.KindHint;if(p.KindHint=="ИУЛ"&&p.Kind=="Титул")p.Kind="ИУЛ";if(p.Kind!="Опись"&&p.Code==null&&p.CodeHint!=null){p.Code=p.CodeHint;p.Tom=Tom(p.Code);}if(p.Organization=="Не определено"&&p.OrganizationHint!=null)p.Organization=p.OrganizationHint;
-            if(p.KindHint=="Опись"||p.Kind=="Опись"){p.Kind="Опись";p.Code=null;p.Tom=null;}
+            if(p.Kind=="Не определено"&&p.KindHint!=null&&!(p.InventoryOverride==false&&p.KindHint=="Опись"))p.Kind=p.KindHint;if(p.KindHint=="ИУЛ"&&p.Kind=="Титул")p.Kind="ИУЛ";if(p.Kind!="Опись"&&p.Code==null&&p.CodeHint!=null){p.Code=p.CodeHint;p.Tom=Tom(p.Code);}if(p.Organization=="Не определено"&&p.OrganizationHint!=null)p.Organization=p.OrganizationHint;
+            if(p.InventoryOverride!=false&&(p.KindHint=="Опись"||p.Kind=="Опись")){p.Kind="Опись";p.Code=null;p.Tom=null;}
             p.Pages=null;p.Readings.RemoveAll(reading=>reading.Field=="Pages");
             p.Book=BookText(p);p.Chief=Chief(p);
             var crc=Regex.Match(n.Replace('С','C').Replace('Р','R').Replace('В','B').Replace('А','A').Replace('Е','E'),@"CRC\s*32[^0-9A-F]{0,6}(?<sum>[0-9A-FОOIL]{8})(?![0-9A-FОOIL])");if(crc.Success)p.CRC=Digits(crc.Groups["sum"].Value);
@@ -320,7 +333,7 @@ namespace PhotoAudit {
         static string FieldLabel(string name){return name=="Page"?"Лист":name=="Pages"?"Листов":name=="Revision"?"Номер изменения":name=="CRC"?"Контрольная сумма CRC32":name;}
         public static InventoryPreview PreviewInventory(IList<Photo> photos){
             foreach(var photo in photos)Parse(photo,false);
-            return new InventoryPreview{Images=photos.Count,ManualPages=photos.Count(p=>p.Kind=="Опись"&&p.ManualInventory),AutomaticPages=photos.Count(p=>p.Kind=="Опись"&&!p.ManualInventory)};
+            var preview=new InventoryPreview{Items=photos.Select(p=>new InventoryPreviewPage{Id=p.Id,Original=p.Original,Image=p.Image,Automatic=p.Kind=="Опись"&&!p.ManualInventory,Manual=p.ManualInventory,Selected=p.Kind=="Опись"}).ToList()};preview.Refresh();return preview;
         }
         public static AuditResult Run(IList<string> inputs,string registry,string destination,Action<int,string> progress,CancellationToken cancel,int requestedWorkers=0,IList<string> inventoryInputs=null,Func<InventoryPreview,bool> beforeAudit=null,bool adaptiveNumeric=true){
             var explicitInputs=new HashSet<string>((inventoryInputs??new List<string>()).Select(Path.GetFullPath),StringComparer.OrdinalIgnoreCase);
@@ -365,15 +378,15 @@ namespace PhotoAudit {
             imageWorkers=ParallelWork.Workers(requestedWorkers,imageBudget);progress(2,"С учётом размера страниц: изображения — "+imageWorkers+", OCR — "+ocrWorkers+", подписи и печати — "+visualWorkers);
             timing.Mark("Подготовка изображений");int prepared=0;ParallelWork.For(sources.Count,imageWorkers,cancel,i=>{if(!useCache||!File.Exists(Path.Combine(candidates,"p"+(i+1).ToString("D4")+"a.jpg")))Prepare(sources[i].Item1,candidates,i+1);int n=Interlocked.Increment(ref prepared);progress(2+(int)(8.0*n/sources.Count),"Подготовлено "+n+" / "+sources.Count);});
             timing.Mark("Первичное OCR");int done=0;NativeWindows.Recognize(candidates,jsons,ocrWorkers,useCache,s=>progress(10+(int)(23.0*Interlocked.Increment(ref done)/(sources.Count*2)),"Первичное OCR: "+s),cancel);
-            var identified=new List<Photo>();for(int i=0;i<sources.Count;i++){string stem="p"+(i+1).ToString("D4");var a=ReadOcr(jsons,stem+"a.jpg");var b=ReadOcr(jsons,stem+"b.jpg");identified.Add(new Photo{Id=i+1,Ocr=Score(a)>=Score(b)?a:b,ManualInventory=explicitFiles.Contains(sources[i].Item1)});}
+            var identified=new List<Photo>();for(int i=0;i<sources.Count;i++){string stem="p"+(i+1).ToString("D4");var a=ReadOcr(jsons,stem+"a.jpg");var b=ReadOcr(jsons,stem+"b.jpg");var best=Score(a)>=Score(b)?a:b;identified.Add(new Photo{Id=i+1,Original=sources[i].Item2,Image=Path.Combine(candidates,best.file),Ocr=best,ManualInventory=explicitFiles.Contains(sources[i].Item1)});}
             var preview=PreviewInventory(identified);File.WriteAllText(Path.Combine(root,"Поиск_описи.json"),Json.Serialize(preview),new UTF8Encoding(false));
             progress(33,"До основной проверки найдено страниц описи: "+preview.Pages+" (автоматически: "+preview.AutomaticPages+", указано вручную: "+preview.ManualPages+").");
-            if(beforeAudit!=null&&!beforeAudit(preview))throw new OperationCanceledException();cancel.ThrowIfCancellationRequested();
+            if(beforeAudit!=null){timing.Mark("Выбор страниц описи");if(!beforeAudit(preview))throw new OperationCanceledException();cancel.ThrowIfCancellationRequested();preview.Apply(identified);File.WriteAllText(Path.Combine(root,"Поиск_описи.json"),Json.Serialize(preview),new UTF8Encoding(false));}cancel.ThrowIfCancellationRequested();
             timing.Mark("Геометрия страниц");var photoArray=new Photo[sources.Count];var baselineArray=new Dictionary<string,string>[sources.Count];int geometryDone=0;string assets=Path.Combine(root,"assets");Directory.CreateDirectory(assets);
             ParallelWork.For(sources.Count,imageWorkers,cancel,i=>{
                 string stem="p"+(i+1).ToString("D4");var pa=ReadOcr(jsons,stem+"a.jpg");var pb=ReadOcr(jsons,stem+"b.jpg");var best=Score(pa)>=Score(pb)?pa:pb;
                 string image=Path.Combine(assets,stem+".jpg");File.Copy(Path.Combine(candidates,best.file),image,true);
-                var p=new Photo{Id=i+1,Original=sources[i].Item2,Image=image,Ocr=best,ManualInventory=explicitFiles.Contains(sources[i].Item1)};Parse(p,false);p.KindHint=p.Kind;p.CodeHint=p.Code;p.OrganizationHint=p.Organization;baselineArray[i]=new Dictionary<string,string>();foreach(var f in new[]{"CRC","Page","Revision"})baselineArray[i][f]=Field(p,f);
+                var p=new Photo{Id=i+1,Original=sources[i].Item2,Image=image,Ocr=best,ManualInventory=identified[i].ManualInventory,InventoryOverride=identified[i].InventoryOverride};Parse(p,false);p.KindHint=p.Kind;p.CodeHint=p.Code;p.OrganizationHint=p.Organization;baselineArray[i]=new Dictionary<string,string>();foreach(var f in new[]{"CRC","Page","Revision"})baselineArray[i][f]=Field(p,f);
                 p.FullImage=Path.Combine(work,stem+"-full.jpg");
                 if(useCache&&File.Exists(p.FullImage)&&File.Exists(Path.Combine(large,stem+".jpg"))&&File.Exists(Path.Combine(large,stem+"-scan.png"))){p.ProcessingNote="Использована подготовленная геометрия того же входного файла";photoArray[i]=p;int cached=Interlocked.Increment(ref geometryDone);progress(33+(int)(7.0*cached/sources.Count),"Геометрия из кэша: "+cached+" / "+sources.Count);return;}
                 using(var original=AdvancedAudit.Upright(sources[i].Item1,best==pb)) {
@@ -391,7 +404,7 @@ namespace PhotoAudit {
                 p.ScanOcr=ReadOcr(largeJson,stem+"-scan.png");p.ScanImage=Path.Combine(assets,stem+"-scan.png");File.Copy(Path.Combine(large,stem+"-scan.png"),p.ScanImage,true);File.Copy(Path.Combine(largeJson,stem+"-scan.json"),Path.Combine(assets,stem+"-scan.json"),true);
                 if(Score(p.ScanOcr)>Score(improved)*1.15&&(FindCode(improved.text)==null||FindCode(improved.text)==FindCode(p.ScanOcr.text))){improved=p.ScanOcr;p.ProcessingNote+="; основное OCR по очищенной странице";}
                 if(Score(improved)>=Score(p.Ocr)*.80){p.Ocr=improved;p.Image=Path.Combine(assets,stem+"-processed.jpg");File.Copy(Path.Combine(large,stem+".jpg"),p.Image,true);}else{using(var original=AdvancedAudit.Upright(sources[p.Id-1].Item1,p.Ocr.file.EndsWith("b.jpg")))FullJpeg(original,p.FullImage);p.ProcessingNote+="; сохранено первичное OCR";}
-                Parse(p,false);var scanFields=new Photo{Ocr=p.ScanOcr,ManualInventory=p.ManualInventory};Parse(scanFields,false);skippedNumeric[i]=new HashSet<string>();
+                Parse(p,false);var scanFields=new Photo{Ocr=p.ScanOcr,ManualInventory=p.ManualInventory,InventoryOverride=p.InventoryOverride};Parse(scanFields,false);skippedNumeric[i]=new HashSet<string>();
                 if(adaptiveNumeric&&p.Kind=="ИУЛ")foreach(string field in new[]{"CRC","Page","Revision"})if(AdvancedAudit.StableWholeReading(new[]{baseline[p.Id][field],uncleanedReadings[i][field],Field(scanFields,field)}))skippedNumeric[i].Add(field);
                 cropArray[i]=AdvancedAudit.Crops(p,crops,skippedNumeric[i]);int n=Interlocked.Increment(ref cropDone);progress(55+(int)(5.0*n/photos.Count),"Увеличенные фрагменты: "+n+" / "+photos.Count);
             ParallelWork.RelieveMemory();});var requests=cropArray.SelectMany(c=>c).ToList();
@@ -432,7 +445,7 @@ namespace PhotoAudit {
             timing.Mark("Сохранение отчёта");ParallelWork.For(photos.Count,visualWorkers,cancel,i=>FormAnalysis.SaveSignatureCrops(photos[i],assets));
             SaveResult(result,root,registry);if(File.Exists(Path.Combine(root,"Ошибка.txt")))File.Delete(Path.Combine(root,"Ошибка.txt"));cancel.ThrowIfCancellationRequested();
             if(Path.GetFullPath(work).StartsWith(root+Path.DirectorySeparatorChar,StringComparison.OrdinalIgnoreCase)&&Path.GetFileName(work)==".ocr-work")Directory.Delete(work,true);
-            var stages=timing.Finish();File.WriteAllText(Path.Combine(root,"Время_проверки.json"),Json.Serialize(new {Version="1.7.1",Seconds=timing.Seconds,RequestedWorkers=requestedWorkers,ImageWorkers=imageWorkers,OcrWorkers=ocrWorkers,VisualWorkers=visualWorkers,AdaptiveNumeric=adaptiveNumeric,StableFieldsWithoutExtraCrops=skippedNumeric.Sum(fields=>fields.Count),Stages=stages}),new UTF8Encoding(false));
+            var stages=timing.Finish();File.WriteAllText(Path.Combine(root,"Время_проверки.json"),Json.Serialize(new {Version="1.8.0",Seconds=timing.Seconds,RequestedWorkers=requestedWorkers,ImageWorkers=imageWorkers,OcrWorkers=ocrWorkers,VisualWorkers=visualWorkers,AdaptiveNumeric=adaptiveNumeric,StableFieldsWithoutExtraCrops=skippedNumeric.Sum(fields=>fields.Count),Stages=stages}),new UTF8Encoding(false));
             progress(100,"Готово за "+TimeSpan.FromSeconds(timing.Seconds).ToString(@"mm\:ss")+": "+result.Images+" страниц / изображений, "+result.Findings.Count+" пунктов для просмотра");return result;
         }
         public static AuditResult Reanalyze(string root,string registry){
@@ -441,7 +454,7 @@ namespace PhotoAudit {
         }
         internal static void SaveResult(AuditResult result,string root,string registry){
             result.Directory=root;result.Report=Path.Combine(root,"Отчет.html");WriteReport(result,registry);
-            File.WriteAllText(Path.Combine(root,"Результаты.json"),Json.Serialize(new {result.Images,result.Volumes,result.Iul,result.MainTitles,result.InventoryPages,result.InventoryOnly,result.RecheckMode,result.RecheckPages,result.CrcMatches,result.CrcCompared,result.RevisionMatches,result.RevisionCompared,Inventory=result.Inventory.Select(i=>new{i.Code,i.Tom,i.Book,i.Revision,i.Box,i.DocumentationKind,Photo=i.Photo.Id}),Findings=result.Findings,Photos=result.Photos.Select(p=>new{p.Id,p.Original,ImageFile=Path.GetFileName(p.Image),p.Kind,p.Code,p.Tom,p.Book,p.Chief,p.Organization,p.ManualInventory,p.CRC,p.Revision,p.Page,p.Pages,p.Ink,p.SignatureRows,p.RowsWithoutBlue,p.ProcessingNote,p.KindHint,p.CodeHint,p.OrganizationHint,p.Readings,p.Signatures,p.Sections,p.Seal,p.DetailWords,p.SectionText})}),new UTF8Encoding(false));
+            File.WriteAllText(Path.Combine(root,"Результаты.json"),Json.Serialize(new {result.Images,result.Volumes,result.Iul,result.MainTitles,result.InventoryPages,result.InventoryOnly,result.RecheckMode,result.RecheckPages,result.CrcMatches,result.CrcCompared,result.RevisionMatches,result.RevisionCompared,Inventory=result.Inventory.Select(i=>new{i.Code,i.Tom,i.Book,i.Revision,i.Box,i.DocumentationKind,Photo=i.Photo.Id}),Findings=result.Findings,Photos=result.Photos.Select(p=>new{p.Id,p.Original,ImageFile=Path.GetFileName(p.Image),p.Kind,p.Code,p.Tom,p.Book,p.Chief,p.Organization,p.ManualInventory,p.InventoryOverride,p.CRC,p.Revision,p.Page,p.Pages,p.Ink,p.SignatureRows,p.RowsWithoutBlue,p.ProcessingNote,p.KindHint,p.CodeHint,p.OrganizationHint,p.Readings,p.Signatures,p.Sections,p.Seal,p.DetailWords,p.SectionText})}),new UTF8Encoding(false));
         }
         static string H(object s){return HttpUtility.HtmlEncode(s==null?"":Convert.ToString(s,Inv));}
         static string ImageHtml(Photo p){return "<figure><a href='assets/p"+p.Id.ToString("D4")+".jpg' target='_blank'><img loading='lazy' src='assets/p"+p.Id.ToString("D4")+".jpg'></a><figcaption>"+H(p.Original)+"<br>"+H(p.Kind)+(p.ManualInventory?" (указана вручную)":"")+"; "+H(p.Code)+"</figcaption></figure>";}

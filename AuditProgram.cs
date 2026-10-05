@@ -40,6 +40,7 @@ namespace PhotoAudit {
         readonly TextBox registry=new TextBox(),output=new TextBox();readonly RichTextBox log=new RichTextBox();
         readonly ProgressBar bar=new ProgressBar();readonly Button run=new Button(),cancel=new Button(),open=new Button(),summary=new Button();
         AuditResult lastResult;DateTime completedAt;string lastRegistry;
+        InventoryPreview pendingInventory;InventoryReviewGate pendingReview;
         readonly Label counts=new Label();readonly List<Button> editing=new List<Button>();CancellationTokenSource token;bool busy;string report;
         readonly ComboBox parallel=new ComboBox{DropDownStyle=ComboBoxStyle.DropDownList,Width=95};
         public AuditForm(){
@@ -56,7 +57,7 @@ namespace PhotoAudit {
             grid.Controls.Add(PathRow("Файл проверки:",registry,(s,e)=>{using(var d=new OpenFileDialog{Filter="Книги Excel|*.xlsx",Title="Таблица для заполнения и сверки CRC32"})if(d.ShowDialog(this)==DialogResult.OK)registry.Text=d.FileName;}),0,6);
             output.Text=AppDomain.CurrentDomain.BaseDirectory;grid.Controls.Add(PathRow("Папка отчётов:",output,(s,e)=>{using(var d=new FolderBrowserDialog{Description="Папка для нового отчёта и изображений"})if(d.ShowDialog(this)==DialogResult.OK)output.Text=d.SelectedPath;}),0,7);
             grid.Controls.Add(new Label{Text="Названия, шифры, изменения, CRC32 и фамилии — по распознанному тексту.\nКаждая подписная строка и круглая печать проверяются отдельно; учитываются чёрные штрихи.\nФон очищается и контраст усиливается автоматически. OCR выполняется локально; нужен русский компонент OCR.",Dock=DockStyle.Fill,ForeColor=Color.FromArgb(73,91,108)},0,8);
-            bar.Dock=DockStyle.Fill;grid.Controls.Add(bar,0,9);log.Dock=DockStyle.Fill;log.ReadOnly=true;log.BackColor=Color.White;log.Text="Добавьте изображения, PDF или ZIP. Файл проверки Excel нужен для заполнения таблицы и сверки контрольных сумм. Для заполнения по описи титулы и ИУЛ загружать не требуется.\nСначала программа найдёт страницы описи и покажет их количество. Затем можно начать основную проверку.\nИсходные файлы сохраняются без изменений. Каждый запуск создаёт отдельную папку отчёта.";grid.Controls.Add(log,0,10);
+            bar.Dock=DockStyle.Fill;grid.Controls.Add(bar,0,9);log.Dock=DockStyle.Fill;log.ReadOnly=true;log.BackColor=Color.White;log.Text="Добавьте изображения, PDF или ZIP. Файл проверки Excel нужен для заполнения таблицы и сверки контрольных сумм. Для заполнения по описи титулы и ИУЛ загружать не требуется.\nПосле предварительного поиска отметьте страницы описи. «Продолжить позже» оставляет запуск на паузе без повторного OCR; «Продолжить…» возвращает к выбору.\nИсходные файлы сохраняются без изменений. Каждый запуск создаёт отдельную папку отчёта.";grid.Controls.Add(log,0,10);
             var bottom=new FlowLayoutPanel{Dock=DockStyle.Fill,FlowDirection=FlowDirection.RightToLeft,WrapContents=false,Padding=new Padding(0,6,0,0)};
             run.Text="Проверить";run.Width=155;run.Height=33;run.BackColor=Color.FromArgb(35,69,100);run.ForeColor=Color.White;run.FlatStyle=FlatStyle.Flat;run.Click+=(s,e)=>Start();bottom.Controls.Add(run);
             cancel.Text="Отмена";cancel.Width=100;cancel.Height=33;cancel.Enabled=false;cancel.Click+=(s,e)=>{if(token!=null)token.Cancel();cancel.Enabled=false;};bottom.Controls.Add(cancel);
@@ -83,7 +84,22 @@ namespace PhotoAudit {
         void RefreshInputs(){list.Items.Clear();foreach(var p in inputs)list.Items.Add((inventoryInputs.Contains(p)?"[Опись] ":"")+p);counts.Text="Выбрано: "+inputs.Count;inventoryStatus.Text="Файлов описи указано вручную: "+inventoryInputs.Count+". Число страниц будет определено перед проверкой.";}
         void Append(string s){log.AppendText("\n"+s);log.SelectionStart=log.TextLength;log.ScrollToCaret();}
         void Ui(Action action){if(!IsDisposed&&IsHandleCreated)BeginInvoke(action);}
-        void SetBusy(bool value){busy=value;run.Enabled=!value;cancel.Enabled=value;open.Enabled=!value&&report!=null;summary.Enabled=!value&&lastResult!=null;registry.Enabled=!value;output.Enabled=!value;list.Enabled=!value;parallel.Enabled=!value;adaptive.Enabled=!value;foreach(var b in editing)b.Enabled=!value;}
+        void SetBusy(bool value){busy=value;run.Text="Проверить";run.Enabled=!value;cancel.Enabled=value;open.Enabled=!value&&report!=null;summary.Enabled=!value&&lastResult!=null;registry.Enabled=!value;output.Enabled=!value;list.Enabled=!value;parallel.Enabled=!value;adaptive.Enabled=!value;foreach(var b in editing)b.Enabled=!value;if(!value){pendingInventory=null;pendingReview=null;}}
+        void ReviewInventory(){
+            if(pendingInventory==null||pendingReview==null||token==null||token.IsCancellationRequested)return;
+            run.Enabled=false;
+            using(var dialog=new InventoryPreviewForm(pendingInventory)){
+                var decision=dialog.ShowDialog(this);pendingInventory.Refresh();inventoryStatus.Text="Выбрано страниц описи: "+pendingInventory.Pages+" из "+pendingInventory.Images;
+                if(decision==DialogResult.Retry){run.Text="Продолжить…";run.Enabled=true;Append("Выбор описи отложен. Подготовленные страницы и первичное OCR сохранены в текущем запуске. Нажмите «Продолжить…», чтобы вернуться к выбору страниц.");return;}
+                bool proceed=decision==DialogResult.OK;var gate=pendingReview;pendingInventory=null;pendingReview=null;run.Text="Проверить";if(proceed)Append("Начата основная проверка с выбранными страницами описи.");gate.Complete(proceed);
+            }
+        }
+        bool BeforeAudit(InventoryPreview preview){
+            using(var gate=new InventoryReviewGate()){
+                Invoke(new Action(()=>{pendingInventory=preview;pendingReview=gate;ReviewInventory();}));
+                return gate.Wait(token.Token);
+            }
+        }
         void FillSummary(bool ask){
             if(lastResult==null)return;
             if(ask&&MessageBox.Show(this,"Проверка завершена. Заполнить сводную таблицу?","Проверка завершена",MessageBoxButtons.YesNo,MessageBoxIcon.Question)!=DialogResult.Yes)return;
@@ -103,24 +119,41 @@ namespace PhotoAudit {
             }
         }
         void Start(){
+            if(pendingInventory!=null){ReviewInventory();return;}
             if(inputs.Count==0){MessageBox.Show(this,"Добавьте фотографии, PDF или ZIP.",Text);return;}
             if(registry.Text!=""&&!File.Exists(registry.Text)){MessageBox.Show(this,"Файл проверки Excel не найден.",Text);return;}
             string dest;try{dest=Path.Combine(Path.GetFullPath(output.Text),"Проверка_"+DateTime.Now.ToString("yyyyMMdd_HHmmss_fff"));}catch(Exception ex){MessageBox.Show(this,ex.Message,Text);return;}
             var selected=inputs.ToList();var manual=inventoryInputs.ToList();bool fast=adaptive.Checked;string reference=registry.Text;int workers=parallel.SelectedIndex==0?0:int.Parse(Convert.ToString(parallel.SelectedItem));token=new CancellationTokenSource();SetBusy(true);bar.Value=0;Append("Предварительный поиск страниц описи.");
-            var worker=new Thread(()=>{try{var result=AuditEngine.Run(selected,reference,dest,(p,s)=>Ui(()=>{bar.Value=Math.Min(100,p);Append(s);}),token.Token,workers,manual,preview=>{bool proceed=false;Invoke(new Action(()=>{inventoryStatus.Text="Найдено страниц описи: "+preview.Pages+"; автоматически: "+preview.AutomaticPages+"; вручную: "+preview.ManualPages;using(var dialog=new InventoryPreviewForm(preview))proceed=dialog.ShowDialog(this)==DialogResult.OK;if(proceed)Append("Начата основная проверка.");}));return proceed;},fast);var finished=DateTime.Now;Ui(()=>{report=result.Report;lastResult=result;completedAt=finished;lastRegistry=reference;Append("Отчёт: "+report);inventoryStatus.Text="Страниц описи в отчёте: "+result.InventoryPages;counts.Text="Фото: "+result.Images+"; пунктов: "+result.Findings.Count;SetBusy(false);token.Dispose();token=null;FillSummary(true);});}
+            var worker=new Thread(()=>{try{var result=AuditEngine.Run(selected,reference,dest,(p,s)=>Ui(()=>{bar.Value=Math.Min(100,p);Append(s);}),token.Token,workers,manual,BeforeAudit,fast);var finished=DateTime.Now;Ui(()=>{report=result.Report;lastResult=result;completedAt=finished;lastRegistry=reference;Append("Отчёт: "+report);inventoryStatus.Text="Страниц описи в отчёте: "+result.InventoryPages;counts.Text="Фото: "+result.Images+"; пунктов: "+result.Findings.Count;SetBusy(false);token.Dispose();token=null;FillSummary(true);});}
                 catch(OperationCanceledException){Ui(()=>{Append("Проверка отменена. Частичные данные сохранены в папке запуска.");SetBusy(false);token.Dispose();token=null;});}
                 catch(Exception ex){ex=ParallelWork.StorageError(ex,dest);string errorLog=AuditProgram.LogError(ex,dest);Ui(()=>{Append("Ошибка: "+ex.Message+"\nЖурнал: "+errorLog);SetBusy(false);token.Dispose();token=null;MessageBox.Show(this,ex.Message,"Не удалось выполнить проверку",MessageBoxButtons.OK,MessageBoxIcon.Error);});}});worker.IsBackground=true;worker.SetApartmentState(ApartmentState.STA);worker.Start();
         }
     }
     public sealed class InventoryPreviewForm:Form {
+        readonly InventoryPreview preview;
+        bool finished;
+        readonly DataGridView pages=new DataGridView{Dock=DockStyle.Fill,AllowUserToAddRows=false,AllowUserToDeleteRows=false,RowHeadersVisible=false,BackgroundColor=Color.White,SelectionMode=DataGridViewSelectionMode.FullRowSelect};
+        readonly Label count=new Label{Dock=DockStyle.Fill};readonly PictureBox image=new PictureBox{Dock=DockStyle.Fill,SizeMode=PictureBoxSizeMode.Zoom,BackColor=Color.FromArgb(229,234,239)};
         public InventoryPreviewForm(InventoryPreview preview){
+            this.preview=preview;
             Icon=Icon.ExtractAssociatedIcon(typeof(AuditForm).Assembly.Location);
-            Text="Опись — перед основной проверкой";Font=new Font("Segoe UI",11);ClientSize=new Size(610,265);FormBorderStyle=FormBorderStyle.FixedDialog;MaximizeBox=false;MinimizeBox=false;StartPosition=FormStartPosition.CenterParent;Padding=new Padding(24);
-            var grid=new TableLayoutPanel{Dock=DockStyle.Fill,ColumnCount=1,RowCount=4};grid.RowStyles.Add(new RowStyle(SizeType.Absolute,48));grid.RowStyles.Add(new RowStyle(SizeType.Absolute,54));grid.RowStyles.Add(new RowStyle(SizeType.Percent,100));grid.RowStyles.Add(new RowStyle(SizeType.Absolute,42));Controls.Add(grid);
-            grid.Controls.Add(new Label{Text="Найдено страниц описи: "+preview.Pages,Font=new Font("Segoe UI",18,FontStyle.Bold),Dock=DockStyle.Fill},0,0);
-            grid.Controls.Add(new Label{Text="Автоматически: "+preview.AutomaticPages+". Указано вручную: "+preview.ManualPages+".\nВсего загруженных страниц: "+preview.Images+".",Dock=DockStyle.Fill},0,1);
-            grid.Controls.Add(new Label{Text=preview.Pages==0?"Опись не определена. Вернитесь к файлам и укажите её вручную либо продолжите без сверки с описью.":preview.Pages==preview.Images?"Загружена только опись. После распознавания можно заполнить таблицу Excel. Титулы и ИУЛ в этом режиме не проверяются.":"Предварительный поиск завершён. Можно начать проверку или вернуться к файлам, чтобы указать дополнительные страницы описи.",Dock=DockStyle.Fill},0,2);
-            var buttons=new FlowLayoutPanel{Dock=DockStyle.Fill,FlowDirection=FlowDirection.RightToLeft,WrapContents=false};var start=new Button{Text="Начать проверку",Width=180,Height=34,DialogResult=DialogResult.OK};var back=new Button{Text="Вернуться к файлам",Width=200,Height=34,DialogResult=DialogResult.Cancel};buttons.Controls.Add(start);buttons.Controls.Add(back);grid.Controls.Add(buttons,0,3);AcceptButton=start;CancelButton=back;
+            Text="Выбрать страницы описи";Font=new Font("Segoe UI",10);ClientSize=new Size(1050,700);MinimumSize=new Size(930,620);MaximizeBox=true;MinimizeBox=false;StartPosition=FormStartPosition.CenterParent;Padding=new Padding(20);
+            var grid=new TableLayoutPanel{Dock=DockStyle.Fill,ColumnCount=1,RowCount=5};foreach(float h in new[]{38f,55f,42f,0f,46f})grid.RowStyles.Add(new RowStyle(h==0?SizeType.Percent:SizeType.Absolute,h==0?100:h));Controls.Add(grid);
+            count.Font=new Font("Segoe UI",16,FontStyle.Bold);grid.Controls.Add(count,0,0);
+            grid.Controls.Add(new Label{Text="Отметьте галочками фотографии и отдельные страницы PDF, которые являются описью. Автоматически найденные страницы уже отмечены. Пока это окно открыто, программа ждёт; повторный поиск не выполняется.",Dock=DockStyle.Fill},0,1);
+            var actions=new FlowLayoutPanel{Dock=DockStyle.Fill,WrapContents=false};AddAction(actions,"Автовыбор",120,p=>p.Automatic||p.Manual);AddAction(actions,"Отметить все",145,p=>true);AddAction(actions,"Снять все",120,p=>false);AddRowsAction(actions,"Отметить выделенные",205,true);AddRowsAction(actions,"Снять с выделенных",195,false);grid.Controls.Add(actions,0,2);
+            pages.Columns.Add(new DataGridViewCheckBoxColumn{HeaderText="Опись",Width=60,SortMode=DataGridViewColumnSortMode.NotSortable});pages.Columns.Add(new DataGridViewTextBoxColumn{HeaderText="№",Width=48,ReadOnly=true,SortMode=DataGridViewColumnSortMode.NotSortable});pages.Columns.Add(new DataGridViewTextBoxColumn{HeaderText="Найдена",Width=95,ReadOnly=true,SortMode=DataGridViewColumnSortMode.NotSortable});pages.Columns.Add(new DataGridViewTextBoxColumn{HeaderText="Файл / страница PDF",AutoSizeMode=DataGridViewAutoSizeColumnMode.Fill,ReadOnly=true,SortMode=DataGridViewColumnSortMode.NotSortable});
+            foreach(var p in preview.Items){int row=pages.Rows.Add(p.Selected,p.Id,p.Manual?"Вручную":p.Automatic?"Авто":"",p.Original);pages.Rows[row].Tag=p;}
+            pages.CurrentCellDirtyStateChanged+=(s,e)=>{if(pages.IsCurrentCellDirty)pages.CommitEdit(DataGridViewDataErrorContexts.Commit);};pages.CellValueChanged+=(s,e)=>Sync();pages.SelectionChanged+=(s,e)=>ShowPage();
+            var body=new TableLayoutPanel{Dock=DockStyle.Fill,ColumnCount=2,RowCount=1};body.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,60));body.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,40));body.Controls.Add(pages,0,0);body.Controls.Add(image,1,0);grid.Controls.Add(body,0,3);
+            var buttons=new FlowLayoutPanel{Dock=DockStyle.Fill,FlowDirection=FlowDirection.RightToLeft,WrapContents=false};var start=new Button{Text="Начать проверку",Width=180,Height=34};start.Click+=(s,e)=>Finish(DialogResult.OK);var later=new Button{Text="Продолжить позже",Width=190,Height=34};later.Click+=(s,e)=>Finish(DialogResult.Retry);var stop=new Button{Text="Отменить запуск",Width=165,Height=34};stop.Click+=(s,e)=>Finish(DialogResult.Cancel);buttons.Controls.Add(start);buttons.Controls.Add(later);buttons.Controls.Add(stop);grid.Controls.Add(buttons,0,4);AcceptButton=start;CancelButton=later;
+            FormClosing+=(s,e)=>{Sync();if(!finished)DialogResult=DialogResult.Retry;};Shown+=(s,e)=>ShowPage();Sync();
         }
+        void AddAction(FlowLayoutPanel host,string text,int width,Func<InventoryPreviewPage,bool> select){var b=new Button{Text=text,Width=width,Height=31};b.Click+=(s,e)=>{pages.EndEdit();foreach(DataGridViewRow row in pages.Rows)row.Cells[0].Value=select((InventoryPreviewPage)row.Tag);Sync();};host.Controls.Add(b);}
+        void AddRowsAction(FlowLayoutPanel host,string text,int width,bool selected){var b=new Button{Text=text,Width=width,Height=31};b.Click+=(s,e)=>{pages.EndEdit();foreach(DataGridViewRow row in pages.SelectedRows)row.Cells[0].Value=selected;Sync();};host.Controls.Add(b);}
+        void Sync(){foreach(DataGridViewRow row in pages.Rows)((InventoryPreviewPage)row.Tag).Selected=Convert.ToBoolean(row.Cells[0].Value??false);preview.Refresh();count.Text="Выбрано страниц описи: "+preview.Pages+" из "+preview.Images;}
+        void Finish(DialogResult result){pages.EndEdit();Sync();finished=true;DialogResult=result;Close();}
+        void ShowPage(){if(pages.CurrentRow==null)return;var p=pages.CurrentRow.Tag as InventoryPreviewPage;Image next=null;try{if(p!=null&&File.Exists(p.Image))using(var loaded=Image.FromFile(p.Image))next=new Bitmap(loaded);}catch{}var old=image.Image;image.Image=next;if(old!=null)old.Dispose();}
+        protected override void Dispose(bool disposing){if(disposing&&image.Image!=null){var old=image.Image;image.Image=null;old.Dispose();}base.Dispose(disposing);}
     }
 }
