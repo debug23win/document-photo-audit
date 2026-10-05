@@ -6,6 +6,12 @@ using PhotoAudit;
 class AdvancedTest {
     static void Assert(bool ok,string message){if(!ok)throw new Exception(message);}
     static Word W(string s,double x,double y,double width){return new Word{text=s,x=x,y=y,width=width,height=25};}
+    static void DigitShapeTest(){
+        foreach(string digit in new[]{"1","2","3","4","5","6","7","8","9","12",""})using(var cell=new Bitmap(220,200)){
+            using(var g=Graphics.FromImage(cell))using(var font=new Font("Times New Roman",64,FontStyle.Regular,GraphicsUnit.Pixel)){g.Clear(Color.White);g.DrawString(digit,font,Brushes.Black,70,50);}
+            using(var contextual=Pagination.Context(cell,true)){double score;string proposed=DigitShapes.Read(contextual,out score);Assert(proposed==null||proposed==digit,"Glyph fallback proposed a different digit");if(digit=="1")Assert(proposed==digit,"Isolated one must be readable by glyph fallback");if(digit==""||digit=="12")Assert(proposed==null,"Blank or multiple digits must not produce a single digit");}
+        }
+    }
     static void ScannerTest(){
         using(var source=new Bitmap(384,576)){
             for(int y=0;y<source.Height;y++)for(int x=0;x<source.Width;x++){
@@ -30,7 +36,7 @@ class AdvancedTest {
         using(var tiny=new Bitmap(1,1)){tiny.SetPixel(0,0,Color.White);using(var clean=DocumentScan.Enhance(tiny))Assert(clean.GetPixel(0,0).R==255,"Tiny image handling failed");}
     }
     static int Main() {
-        ScannerTest();
+        ScannerTest();DigitShapeTest();
         Assert(Pagination.Number("Лист 1")=="1"&&Pagination.Number("Лист З")=="3","Digit-cell OCR normalization failed");
         Assert(Pagination.Number("Лист")==null&&Pagination.Number("1 3")==null&&Pagination.Number("Лист 0")==null,"Empty/ambiguous numeric cells must not fabricate a number");
         var partial=new List<Photo>{new Photo{Id=1,Page=null,Pages=3},new Photo{Id=2,Page=2},new Photo{Id=3,Page=3}};

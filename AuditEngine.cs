@@ -200,6 +200,7 @@ namespace PhotoAudit {
                 if(p.Kind=="Титул фрагмента"&&p.Signatures.Count==0)Add(r,"Наблюдение",p.Code,"Титул фрагмента","Дополнительный титул фрагмента: состав подписантов и необходимость отдельного подписания определяются по правилам вашей документации.",p);
                 if(unconfirmed.Count>0)Add(r,"Проверить",p.Code,"Подписи: проверка отдельных строк",string.Join("; ",unconfirmed.Select(v=>v.Role+" ("+(v.Name??"фамилия не прочитана")+"): "+v.Status))+". Показаны отдельные ячейки; наличие штрихов не подтверждает подлинность подписи.",p);
                 if(p.Kind=="ИУЛ"&&p.Signatures.Count==0)Add(r,"Проверить",p.Code,"Подписная таблица не распознана","Не удалось выделить подписные строки. Отсутствие распознанной таблицы не означает отсутствие подписей.",p);
+                foreach(var proposed in p.Readings.Where(v=>v.Status.StartsWith("Предложено по форме цифры")))Add(r,"Проверить",p.Code,"Проверьте чтение: "+FieldLabel(proposed.Field),"Windows OCR не прочитал отдельную цифру. По сходству с образцами шрифтов предложено значение «"+proposed.Value+"». Это предварительное чтение: подтвердите его по увеличенному фрагменту.",p);
                 foreach(var reading in p.Readings.Where(v=>v.Value==null)){
                     // The total is commonly printed only on the last IUL sheet.
                     if(reading.Field=="Pages"&&reading.Candidates.Count==0&&photos.Any(other=>other.Kind=="ИУЛ"&&other.Code==p.Code&&other.Pages.HasValue))continue;
@@ -215,6 +216,10 @@ namespace PhotoAudit {
         static OcrPage ReadOcr(string folder,string file){return Json.Deserialize<OcrPage>(File.ReadAllText(Path.Combine(folder,Path.GetFileNameWithoutExtension(file)+".json"),Encoding.UTF8));}
         static void ApplyReadings(Photo p) {
             foreach(var reading in p.Readings){int n;
+                if(reading.Field=="Page"&&reading.Value==null&&reading.Candidates.Count==0&&!string.IsNullOrEmpty(p.Image)){
+                    string cell=Path.Combine(Path.GetDirectoryName(p.Image),"p"+p.Id.ToString("D4")+"-PageCell-1.png");
+                    if(File.Exists(cell))using(var image=new Bitmap(cell)){double similarity;string proposed=DigitShapes.Read(image,out similarity);if(proposed!=null){reading.Value=proposed;reading.Candidates.Add(proposed);reading.Sources.Add(Path.GetFileName(cell)+" (форма цифры; сходство "+similarity.ToString("0.00",Inv)+"): "+proposed);reading.Status="Предложено по форме цифры; проверьте фрагмент";reading.Agreement=1;reading.Attempts++;}}
+                }
                 if(reading.Field=="CRC")p.CRC=reading.Value;
                 if(reading.Field=="Page")p.Page=int.TryParse(reading.Value,out n)?(int?)n:null;
                 if(reading.Field=="Pages")p.Pages=int.TryParse(reading.Value,out n)?(int?)n:null;
