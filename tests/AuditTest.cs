@@ -47,6 +47,22 @@ class AuditTest {
         r=AuditEngine.Analyze(new List<Photo>{b},null);
         if(b.Kind!="ИУЛ"||b.Pages!=null||b.Readings.Any(v=>v.Field=="Pages")||r.Findings.Any(f=>f.Topic.Contains("Листов")||f.Topic.Contains("комплектност")||f.Topic.Contains("пропуск")))throw new Exception("Ignored total count caused warnings or inventory misclassification");
         if(!r.Findings.Any(f=>f.Topic=="Не удалось прочитать: Лист"))throw new Exception("Ignoring total count must preserve sheet-number review");
+        if(AuditEngine.DocumentCode("Раздел_123-45-6789-TkP12.l.9.pdf")!="123-45-6789-ТКР12.1.9"||AuditEngine.DocumentCode("123-45-6789-ТКР12Л.11")!="123-45-6789-ТКР12.1.11")throw new Exception("TKR hierarchy and mixed OCR alphabets are not normalized");
+        var tkr=new Photo{Id=7,Original="tkr-inventory.jpg",Image=file,Ocr=InventoryPage("Опись. Стадия: Проектная документация","TkP12.l.9")};tkr.Ocr.lines[1].words.Add(W("Короба",1150,300));tkr.Ocr.lines[1].words.Add(W("13",1150,600));r=AuditEngine.Analyze(new List<Photo>{tkr},null);
+        if(!r.InventoryOnly||r.Inventory.Count!=1||r.Inventory[0].Code!="123-45-6789-ТКР12.1.9"||r.Inventory[0].Tom!="3.12.1.9"||r.Inventory[0].Box!=13)throw new Exception("TKR inventory row with unread volume cell was lost");
+        tkr.Ocr.text="Шифр тома\nНаименование локумент\n123-45-6789-TkP12.l.9";r=AuditEngine.Analyze(new List<Photo>{tkr},null);if(!r.InventoryOnly||r.Inventory.Count!=1)throw new Exception("Damaged document-header OCR must not turn inventory continuation into a title");
+        tkr.Ocr=Page("Ленгипротранс\nКнига 1. Тестовое здание\n123-45-6789-ТКР12.1.9\nТом 3.12.1.9");r=AuditEngine.Analyze(new List<Photo>{tkr},null);if(r.MainTitles!=1||tkr.Code!="123-45-6789-ТКР12.1.9"||tkr.Tom!="3.12.1.9")throw new Exception("TKR title classification failed");
+        if(AuditEngine.DocumentCode("123-45-6789-ТКР12.1.10\nНаименование")!="123-45-6789-ТКР12.1.10")throw new Exception("Next-line label leaked into code digits");
+        foreach(string arbitrary in new[]{"ЭОМ-ABC/17.02", "007", "АЛЬФА", "Я", "СП / Договор №7", "PREFIX-123-45-6789-ИЛО4.1.1-SUFFIX", "Ω/PLAN-07"}){
+            var page=InventoryPage("Опись",arbitrary);page.lines[1].words.RemoveAll(w=>w.text=="123-45-6789-");page.lines[1].words.Add(W("1.",30,600));
+            var photo=new Photo{Id=20,Image=file,Ocr=page};var generic=AuditEngine.Analyze(new List<Photo>{photo},null);
+            if(!generic.InventoryOnly||generic.Inventory.Count!=1||generic.Inventory[0].Code!=DocumentIdentity.Value(arbitrary))throw new Exception("Arbitrary inventory code rejected: "+arbitrary);
+            var field=new OcrPage{width=1200,height=2200,text="Обозначение документа: "+arbitrary+"\nИнформационно-удостоверяющий лист",lines=new List<Line>{new Line{text="Обозначение документа: "+arbitrary,words=new List<Word>{W(arbitrary,50,500)}}}};
+            var iul=new Photo{Id=21,Image=file,Ocr=field};generic=AuditEngine.Analyze(new List<Photo>{iul},null);
+            if(iul.Code!=DocumentIdentity.Value(arbitrary)||iul.Kind!="ИУЛ")throw new Exception("Arbitrary field code rejected: "+arbitrary);
+            if(DocumentIdentity.MatchFile("Альбом_"+arbitrary+".pdf",new[]{DocumentIdentity.Value(arbitrary)})!=DocumentIdentity.Value(arbitrary))throw new Exception("Arbitrary filename matching failed: "+arbitrary);
+        }
+        if(DocumentIdentity.MatchFile("ABC-120.pdf",new[]{"ABC-12"})!=null||DocumentIdentity.MatchFile("ABC-12.3.pdf",new[]{"ABC-12"})!=null)throw new Exception("Partial code must not match another document");
         Console.WriteLine("Audit tests passed: classification, names, CRC, single-row/continuation inventory, wrapped volume, ignored total count with sheet-number review");return 0;
     }
 }

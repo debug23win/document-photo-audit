@@ -1,4 +1,4 @@
-param([ValidatePattern('^\d+\.\d+\.\d+$')][string]$Version='1.6.0')
+param([ValidatePattern('^\d+\.\d+\.\d+$')][string]$Version='1.7.0')
 $ErrorActionPreference='Stop'
 Push-Location -LiteralPath $PSScriptRoot
 $infoPath=Join-Path $PSScriptRoot 'AppInfo.cs'
@@ -9,7 +9,7 @@ $compiler=Join-Path $env:WINDIR 'Microsoft.NET/Framework64/v4.0.30319/csc.exe'
 if(!(Test-Path -LiteralPath $compiler)){$compiler=Join-Path $env:WINDIR 'Microsoft.NET/Framework/v4.0.30319/csc.exe'}
 . (Join-Path $PSScriptRoot 'BuildSupport.ps1')
 $nativeRefs=@(Get-NativeWindowsReferences)
-& $compiler /nologo /target:winexe /platform:anycpu /optimize+ /codepage:65001 '/out:Автопроверка_документов.exe' ('/win32icon:'+(Join-Path $PSScriptRoot 'assets/app.ico')) $nativeRefs /r:System.Windows.Forms.dll /r:System.Drawing.dll /r:System.Xml.Linq.dll /r:System.IO.Compression.dll /r:System.IO.Compression.FileSystem.dll /r:System.Web.dll /r:System.Web.Extensions.dll AuditProgram.cs AuditEngine.cs AdvancedAudit.cs DocumentScan.cs Pagination.cs DigitShapes.cs FormAnalysis.cs QualityBenchmark.cs NativeWindows.cs ParallelWork.cs XlsxReader.cs SummaryWriter.cs SummaryForm.cs Updates.cs AppInfo.cs
+& $compiler /nologo /target:winexe /platform:anycpu /optimize+ /codepage:65001 '/out:Автопроверка_документов.exe' ('/win32icon:'+(Join-Path $PSScriptRoot 'assets/app.ico')) $nativeRefs /r:System.Windows.Forms.dll /r:System.Drawing.dll /r:System.Xml.Linq.dll /r:System.IO.Compression.dll /r:System.IO.Compression.FileSystem.dll /r:System.Web.dll /r:System.Web.Extensions.dll AuditProgram.cs AuditEngine.cs AdvancedAudit.cs DocumentScan.cs Pagination.cs DigitShapes.cs FormAnalysis.cs QualityBenchmark.cs NativeWindows.cs ParallelWork.cs XlsxReader.cs SummaryWriter.cs SummaryForm.cs Recheck.cs RecheckForm.cs DocumentIdentity.cs Updates.cs AppInfo.cs
 if($LASTEXITCODE -ne 0){throw 'Compilation failed'}
 $ocrPath=Join-Path $PSScriptRoot 'Recognize.ps1'
 [IO.File]::WriteAllText($ocrPath,[IO.File]::ReadAllText($ocrPath,[Text.Encoding]::UTF8),[Text.UTF8Encoding]::new($true))

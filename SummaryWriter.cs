@@ -20,6 +20,7 @@ namespace PhotoAudit {
         public string Source;
         public AuditResult Result;
         public bool IncludeInventoryMetadata;
+        public int Candidates;
         public readonly List<SummaryRow> Rows=new List<SummaryRow>();
         public readonly List<string> Skipped=new List<string>();
         public readonly List<string> MetadataNotes=new List<string>();
@@ -35,26 +36,35 @@ namespace PhotoAudit {
             if(result==null)throw new ArgumentNullException("result");
             var plan=new SummaryPlan{Source=Path.GetFullPath(source),Result=result,IncludeInventoryMetadata=result.InventoryOnly&&includeInventoryMetadata};
             var book=XlsxReader.Read(plan.Source,MainSheet);
-            var groups=book.Rows.Select(row=>new SummaryRow{Source=row,Code=AuditEngine.DocumentCode(XlsxReader.Text(row.Values[2]))}).Where(row=>row.Code!=null&&(!result.InventoryOnly||BaseVolumeFile(row))).GroupBy(row=>row.Code).ToDictionary(g=>g.Key,g=>g.ToList());
             var codes=(result.InventoryOnly?result.Inventory.Select(i=>i.Code):result.Photos.Where(p=>p.Kind!="Опись"&&p.Code!=null).Select(p=>p.Code).Concat(result.Findings.Select(f=>AuditEngine.DocumentCode(f.Code)))).Where(c=>c!=null).Distinct().OrderBy(c=>c,StringComparer.Ordinal).ToList();
+            var matcher=new DocumentIdentity.Matcher(codes);var groups=book.Rows.Select(row=>new SummaryRow{Source=row,Code=matcher.Match(XlsxReader.Text(row.Values[2]))}).Where(row=>row.Code!=null&&BaseVolumeFile(row)).GroupBy(row=>row.Code).ToDictionary(g=>g.Key,g=>g.ToList());
+            plan.Candidates=codes.Count;
             foreach(var code in codes){
                 List<SummaryRow> candidates;
                 if(!groups.TryGetValue(code,out candidates)){plan.Skipped.Add(code+": строка в Excel не найдена.");continue;}
-                var versions=candidates.Select(row=>XlsxReader.Normal(row.Source.Values[7])).Distinct().ToList();
+                foreach(var part in candidates.GroupBy(row=>Fragment(row.Source.Values[2]))){
+                var selected=part.ToList();var versions=selected.Select(row=>XlsxReader.Normal(row.Source.Values[7])).Distinct().ToList();
                 if(versions.Count>1){
                     var read=result.Photos.Where(p=>p.Code==code&&p.Kind=="ИУЛ"&&!string.IsNullOrWhiteSpace(p.CRC)).Select(p=>XlsxReader.Normal(p.CRC)).Distinct().ToList();
                     var matches=versions.Where(v=>v!=""&&read.Contains(v)).ToList();
-                    if(matches.Count!=1){plan.Skipped.Add(code+(result.InventoryOnly?": в Excel несколько версий с разными CRC32; по одной описи выбрать версию невозможно.":": несколько версий с разными контрольными суммами; однозначное соответствие не найдено."));continue;}
-                    candidates=candidates.Where(row=>XlsxReader.Normal(row.Source.Values[7])==matches[0]).ToList();
+                    if(matches.Count!=1){plan.Skipped.Add(code+(part.Key==""?"":" / фрагмент "+part.Key)+(result.InventoryOnly?": в Excel несколько версий с разными CRC32; по одной описи выбрать версию невозможно.":": несколько версий с разными контрольными суммами; однозначное соответствие не найдено."));continue;}
+                    selected=selected.Where(row=>XlsxReader.Normal(row.Source.Values[7])==matches[0]).ToList();
                 }
-                foreach(var item in candidates){item.Inventory=result.Inventory.FirstOrDefault(i=>i.Code==code);plan.Rows.Add(item);if(plan.IncludeInventoryMetadata)plan.MetadataNotes.AddRange(MetadataNotes(item).Select(note=>code+", строка "+item.Source.Row+": "+note));}
+                foreach(var item in selected){item.Inventory=result.Inventory.FirstOrDefault(i=>i.Code==code);plan.Rows.Add(item);if(plan.IncludeInventoryMetadata)plan.MetadataNotes.AddRange(MetadataNotes(item).Select(note=>code+", строка "+item.Source.Row+": "+note));}
+                }
             }
             return plan;
         }
+        static string Fragment(object name){var m=Regex.Match(XlsxReader.Normal(name),@"ФРАГМЕНТ\s*(?<n>[0-9]{1,3})(?![0-9])");return m.Success?int.Parse(m.Groups["n"].Value).ToString(Inv):"";}
+        public static string MatchMessage(SummaryPlan plan){
+            if(plan.Candidates==0)return "Шифры документов и строки описи не распознаны. Сохранение недоступно: неизвестно, какие строки Excel заполнять. Укажите файл описи или повторите распознавание в актуальной версии программы.";
+            if(plan.Rows.Count==0)return "Нет однозначно сопоставленных строк Excel. Сохранение недоступно. Причины перечислены ниже.";
+            return plan.Skipped.Count==0?"Все распознанные документы сопоставлены с таблицей.":"Часть строк пропущена; причины перечислены ниже.";
+        }
         static bool BaseVolumeFile(SummaryRow item){
             string name=Regex.Replace(XlsxReader.Normal(item.Source.Values[2]),@"\s+","");name=Regex.Replace(name,@"\.(PDF|DOCX?|XLSX?|DWG|ZIP)$","");
-            int start=name.IndexOf(item.Code,StringComparison.Ordinal);if(start<0)return true;
-            string tail=name.Substring(start+item.Code.Length);
+            string normalizedCode=DocumentIdentity.Key(item.Code);int start=name.IndexOf(normalizedCode,StringComparison.Ordinal);if(start<0)return true;
+            string tail=name.Substring(start+normalizedCode.Length);
             // Codes ending in -УЛ, -Л1, -О or .1 describe attached documents, not another CRC version of the volume.
             return !Regex.IsMatch(tail,@"^(?:\.[А-ЯA-Z0-9]|-[А-ЯA-Z0-9])")||Regex.IsMatch(tail,@"^-ИЗМ[.0-9(]");
         }

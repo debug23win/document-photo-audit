@@ -22,7 +22,7 @@ namespace PhotoAudit {
     public sealed class Photo {
         public int Id;public string Original,Image,Kind,Code,Tom,Organization,Book,Chief;public string CRC;public int? Revision,Page,Pages;public bool ManualInventory;
         public OcrPage Ocr,ScanOcr;public string ScanImage;public List<Word> Words;public int Ink;public int SignatureRows,RowsWithoutBlue;
-        public string FullImage,ProcessingNote,SectionText,KindHint,CodeHint,OrganizationHint;public List<Word> DetailWords;
+        public string FullImage,ImageFile,ProcessingNote,SectionText,KindHint,CodeHint,OrganizationHint;public List<Word> DetailWords;
         public List<Reading> Readings=new List<Reading>();public List<SignatureCheck> Signatures=new List<SignatureCheck>();
         public Dictionary<string,string> Sections=new Dictionary<string,string>();public SealCheck Seal;
     }
@@ -35,6 +35,7 @@ namespace PhotoAudit {
         public int Images,Volumes,Iul,MainTitles,InventoryPages,CrcMatches,CrcCompared,RevisionMatches,RevisionCompared;
         public string Report,Directory;
         public bool InventoryOnly;
+        public string RecheckMode;public List<int> RecheckPages=new List<int>();
         public List<Photo> Photos=new List<Photo>();public List<Finding> Findings=new List<Finding>();public List<InventoryEntry> Inventory=new List<InventoryEntry>();
     }
     public sealed class InventoryPreview {
@@ -49,21 +50,41 @@ namespace PhotoAudit {
         static string Compact(string s){return Regex.Replace(N(s),@"\s+","").Replace("ИЛ0","ИЛО").Replace("ИЛO","ИЛО");}
         static string BookClean(string s){s=Regex.Replace(N(s),@"^КНИГА\s*\d+[.,]?\s*","");return Regex.Replace(s,@"[^А-ЯA-Z0-9]","");}
         static string Digits(string s){return N(s).Replace("З","3").Replace("О","0").Replace("O","0").Replace("Л","1").Replace("L","1").Replace("I","1").Replace("Н","11").Replace("Б","6").Replace("Ч","4");}
-        static string FindCode(string s){
-            string c=Regex.Replace(Compact(s),@"(И[.]?[ЛJI1Ј][ОO0][34ЗЧ])Л\.","$1.1.");c=Regex.Replace(c,@"(И[.]?[ЛJI1Ј][ОO0][34ЗЧ]\.[0-9]{1,2})Л(?=[^0-9]|$)","$1.1");
-            var m=Regex.Match(c,@"(?<p>\d{3}-\d{2}-\d{4})-И[.]?[ЛJI1Ј][ОO0](?<s>[34ЗЧ]\.[0-9ЗОOLIЛНБ]{1,2}\.[0-9ЗОOLIЛНБ]{1,2})(?![0-9ЗОOLIЛНБ])");
-            return m.Success?m.Groups["p"].Value+"-ИЛО"+Digits(m.Groups["s"].Value):null;
+        const string PrefixPattern=@"[0-9ОOILЛЗ]{3}-[0-9ОOILЛЗ]{2}-[0-9ОOILЛЗ]{4}";
+        static string CodeText(string s){
+            string c=Compact(s);c=Regex.Replace(c,PrefixPattern,m=>Digits(m.Value));c=Regex.Replace(c,@"[ТT][КK][РP]","ТКР");
+            c=Regex.Replace(c,@"(ТКР[0-9ЗОOLIЛНБ]{1,2})Л\.","$1.1.");return c;
         }
-        public static string DocumentCode(string text){return FindCode(text);}
+        static string FindCode(string s){
+            if(!(s??"").Contains("\n"))return LegacyCode(s);
+            string[] lines=s.Split(new[]{'\r','\n'},StringSplitOptions.RemoveEmptyEntries);
+            foreach(string line in lines){string code=LegacyCode(line);if(code!=null)return code;}
+            for(int i=0;i+1<lines.Length;i++)if(lines[i].TrimEnd().EndsWith("-")){string code=LegacyCode(lines[i]+lines[i+1]);if(code!=null)return code;}
+            return LegacyCode(s);
+        }
+        static string LegacyCode(string s){
+            string c=Regex.Replace(CodeText(s),@"(И[.]?[ЛJI1Ј][ОO0][34ЗЧ])Л\.","$1.1.");c=Regex.Replace(c,@"(И[.]?[ЛJI1Ј][ОO0][34ЗЧ]\.[0-9]{1,2})Л(?=[^0-9]|$)","$1.1");
+            var m=Regex.Match(c,@"(?<p>\d{3}-\d{2}-\d{4})-И[.]?[ЛJI1Ј][ОO0](?<s>[34ЗЧ]\.[0-9ЗОOLIЛНБ]{1,2}\.[0-9ЗОOLIЛНБ]{1,2})(?![0-9ЗОOLIЛНБ])");
+            if(m.Success)return m.Groups["p"].Value+"-ИЛО"+Digits(m.Groups["s"].Value);
+            m=Regex.Match(c,@"(?<p>\d{3}-\d{2}-\d{4})-ТКР(?<s>[0-9ЗОOLIЛНБ]{1,2}(?:[.,][0-9ЗОOLIЛНБ]{1,3}){0,3})(?![0-9ЗОOLIЛНБ])");
+            return m.Success?m.Groups["p"].Value+"-ТКР"+Digits(m.Groups["s"].Value).Replace(',','.'):null;
+        }
+        static string CodeValue(string text){
+            string value=DocumentIdentity.Value(text);if(value==null)return null;
+            if(Regex.IsMatch(CodeText(value),@"^\d{3}-\d{2}-\d{4}-(?:И[.]?[ЛJI1Ј][ОO0]|ТКР)[0-9ЗЧОOLIЛНБ.,]+(?:-УЛ)?$")){string legacy=FindCode(value);if(legacy!=null)return legacy;}
+            return value;
+        }
+        public static string DocumentCode(string text){if((text??"").Contains("\n"))return FindCode(text)??CodeValue(text);return Regex.IsMatch(text??"",@"\.(?:PDF|DOCX?|XLSX?|DWG|ZIP)$",RegexOptions.IgnoreCase)?FindCode(text)??DocumentIdentity.Value(text):CodeValue(text);}
         static string PageCode(string s){
+            string explicitCode=FindCode(s);if(explicitCode!=null&&explicitCode.Contains("-ТКР"))return explicitCode;
             var prefix=Regex.Match(Compact(s),@"\d{3}-\d{2}-\d{4}");
             var tom=Regex.Match(N(s),@"\bТОМ\s*(?<v>4\s*\.\s*[34ЗЧ]\s*\.\s*[0-9ЗОOLIЛНБ]{1,2}\s*\.\s*[0-9ЗОOLIЛНБ]{1,2})(?![0-9ЗОOLIЛНБ])");
             if(prefix.Success&&tom.Success)return prefix.Value+"-ИЛО"+Regex.Replace(Digits(tom.Groups["v"].Value),@"\s+","").Substring(2);
             return FindCode(s);
         }
-        static string Tom(string code){if(code==null)return null;return "4."+code.Substring(code.LastIndexOf("ИЛО",StringComparison.Ordinal)+3);}
+        static string Tom(string code){if(code==null)return null;int tkr=code.LastIndexOf("ТКР",StringComparison.Ordinal);int ilo=code.LastIndexOf("ИЛО",StringComparison.Ordinal);return tkr>=0?"3."+code.Substring(tkr+3):ilo>=0?"4."+code.Substring(ilo+3):null;}
         static List<Word> Words(OcrPage p){return p.lines.SelectMany(l=>l.words??new List<Word>()).ToList();}
-        static int Score(OcrPage page){return Regex.Matches(N(page.text),@"ПРОЕКТ|ГЛАВНЫЙ|КНИГА|ТОМ|ДОКУМЕНТ|ОПИСЬ|ИНЖЕНЕР|КОНТРОЛЬ|ЛИСТ|СИСТЕМА|ЗАМЕСТИТЕЛЬ").Count*25+Regex.Matches(page.text??"",@"[А-Яа-я]{4,}").Count+(FindCode(page.text)!=null?120:0);}
+        internal static int Score(OcrPage page){return Regex.Matches(N(page.text),@"ПРОЕКТ|ГЛАВНЫЙ|КНИГА|ТОМ|ДОКУМЕНТ|ОПИСЬ|ИНЖЕНЕР|КОНТРОЛЬ|ЛИСТ|СИСТЕМА|ЗАМЕСТИТЕЛЬ").Count*25+Regex.Matches(page.text??"",@"[А-Яа-я]{4,}").Count+(FindCode(page.text)!=null?120:0);}
         static bool ImageExt(string p){return new []{".jpg",".jpeg",".png",".bmp"}.Contains(Path.GetExtension(p).ToLowerInvariant());}
         static void Jpeg(Bitmap bitmap,string path){ParallelWork.SaveImage(path,()=>{var codec=ImageCodecInfo.GetImageEncoders().First(c=>c.MimeType=="image/jpeg");using(var quality=new EncoderParameters(1)){quality.Param[0]=new EncoderParameter(System.Drawing.Imaging.Encoder.Quality,92L);bitmap.Save(path,codec,quality);}});}
         static void FullJpeg(Bitmap bitmap,string path){ParallelWork.SaveImage(path,()=>{var codec=ImageCodecInfo.GetImageEncoders().First(c=>c.MimeType=="image/jpeg");using(var quality=new EncoderParameters(1)){quality.Param[0]=new EncoderParameter(System.Drawing.Imaging.Encoder.Quality,100L);bitmap.Save(path,codec,quality);}});}
@@ -120,13 +141,13 @@ namespace PhotoAudit {
         static bool IsInventory(OcrPage page){
             string text=N(page.text),compact=Compact(page.text);
             bool heading=Regex.IsMatch(text.Substring(0,Math.Min(400,text.Length)),@"(?:^| )ОПИСЬ(?: |$)");
-            bool columns=compact.Contains("ШИФРТОМА")&&compact.Contains("НАИМЕНОВАНИЕДОКУМЕНТА");
-            bool entries=Regex.IsMatch(compact,@"ИЛ[ОO0][34ЗЧ]")||Regex.IsMatch(compact,@"4\.[34ЗЧ]\.[0-9ЗОOLIЛНБ]");
+            bool columns=(compact.Contains("ШИФР")||compact.Contains("ОБОЗНАЧЕНИЕ"))&&compact.Contains("НАИМЕНОВАНИЕ");
+            bool entries=Regex.IsMatch(compact,@"ИЛ[ОO0][34ЗЧ]")||CodeText(page.text).Contains("ТКР")||Regex.IsMatch(compact,@"(?:4\.[34ЗЧ]|3\.[0-9]{1,2})\.[0-9ЗОOLIЛНБ]");
             bool iul=compact.Replace('С','C').Replace('Р','R').Contains("CRC32")||compact.Contains("УДОСТОВЕРЯЮ")||compact.Contains("-УЛ");
-            return !iul&&(heading||columns)&&entries;
+            return !iul&&(heading||columns)&&(entries||DocumentIdentity.InventoryRows(page).Count>0);
         }
         static Photo Parse(Photo p,bool details=true){
-            string n=N(p.Ocr.text),c=Compact(p.Ocr.text);p.Words=Words(p.Ocr);p.Code=PageCode(p.Ocr.text);p.Tom=Tom(p.Code);
+            string n=N(p.Ocr.text),c=Compact(p.Ocr.text);p.Words=Words(p.Ocr);string explicitCode=DocumentIdentity.PageCode(p.Ocr,p.Image);p.Code=explicitCode!=null?CodeValue(explicitCode):PageCode(p.Ocr.text)??p.CodeHint;p.Tom=Tom(p.Code);
             if(p.ManualInventory||IsInventory(p.Ocr)){p.Kind="Опись";p.Code=null;p.Tom=null;}
             else if(c.Replace('С','C').Replace('Р','R').Contains("CRC32")||c.Contains("УДОСТОВЕРЯЮЩ")||c.Contains("УДОСТОВЕРЯЮШ")||((n.Contains("КОНТРОЛЬНАЯ")||n.Contains("CRC32"))&&n.Contains("ЛИСТ"))||c.Contains("-УЛ"))p.Kind="ИУЛ";
             else if(n.Contains("ФРАГМЕНТ"))p.Kind="Титул фрагмента";
@@ -143,27 +164,34 @@ namespace PhotoAudit {
                 var rev=p.Words.Where(w=>w.x>p.Ocr.width*.77&&w.y>p.Ocr.height*.15&&w.y<p.Ocr.height*.32&&Regex.IsMatch(Digits(w.text),@"^\d{1,2}$")).OrderBy(w=>w.y).FirstOrDefault();
                 if(rev!=null)p.Revision=int.Parse(Digits(rev.text));
             }
-            if(details){ApplyReadings(p);FormAnalysis.Inspect(p,null);}return p;
+            ApplyReadings(p);if(details)FormAnalysis.Inspect(p,null);return p;
+        }
+        static string InventorySuffix(string text){
+            string c=CodeText(text);if(!Regex.IsMatch(c,@"^(?:И[.]?[ЛJI1Ј][ОO0]|ТКР)"))return null;
+            string code=FindCode("000-00-0000-"+c);return code==null?null:code.Substring(12);
+        }
+        static string InventoryPrefix(Photo p,Word anchor,string unique){
+            var prefixes=p.Words.Where(w=>Math.Abs(w.x-anchor.x)<p.Ocr.width*.1&&Math.Abs(w.y-anchor.y)<85).Select(w=>new {Word=w,Match=Regex.Match(CodeText(w.text),@"^\d{3}-\d{2}-\d{4}-?$" )}).Where(v=>v.Match.Success).OrderBy(v=>Math.Abs(v.Word.y-anchor.y)).ToList();
+            return prefixes.Count>0?prefixes[0].Match.Value.TrimEnd('-'):unique;
         }
         static List<InventoryEntry> ParseInventory(Photo p){
-            var result=new List<InventoryEntry>();var volumes=p.Words.Where(w=>w.x<p.Ocr.width*.2&&Regex.IsMatch(Digits(w.text),@"^4\.[34]\." )).OrderBy(w=>w.y).ToList();
-            foreach(var v in volumes){
-                string volume=Digits(v.text);if(!Regex.IsMatch(volume,@"^4\.[34]\.[0-9]{1,2}\.[0-9]{1,2}$"))volume=Regex.Replace(Digits(string.Join("",p.Words.Where(w=>w.x>=v.x-1&&w.x<p.Ocr.width*.19&&Math.Abs(w.y-v.y)<12).OrderBy(w=>w.x).Select(w=>w.text))),@"[^0-9.]","");
-                var prefix=Regex.Match(Compact(p.Ocr.text),@"\d{3}-\d{2}-\d{4}");
-                var suffixWord=p.Words.Where(w=>w.x>p.Ocr.width*.145&&w.x<p.Ocr.width*.4&&Math.Abs(w.y-v.y)<35&&Regex.IsMatch(Compact(w.text),@"^ИЛ[ОO0]" )).OrderBy(w=>Math.Abs(w.y-v.y)).FirstOrDefault();
-                string code=prefix.Success&&suffixWord!=null?FindCode(prefix.Value+"-"+suffixWord.text):null;
-                if(code!=null)volume=Tom(code);
-                if(!Regex.IsMatch(volume,@"^4\.[34]\.[0-9]{1,2}\.[0-9]{1,2}$"))continue;
-                if(code==null&&prefix.Success)code=prefix.Value+"-ИЛО"+volume.Substring(2);
-                if(code!=null)result.Add(InventoryRow(p,code,volume,v.y));
+            var result=new List<InventoryEntry>();
+            var pagePrefixes=Regex.Matches(CodeText(p.Ocr.text),@"\d{3}-\d{2}-\d{4}").Cast<Match>().Select(m=>m.Value).Distinct().ToList();string uniquePrefix=pagePrefixes.Count==1?pagePrefixes[0]:null;
+            var suffixes=p.Words.Where(w=>w.x>p.Ocr.width*.145&&w.x<p.Ocr.width*.4).Select(w=>new {Word=w,Suffix=InventorySuffix(w.text)}).Where(v=>v.Suffix!=null).OrderBy(v=>v.Word.y).ToList();
+            foreach(var suffix in suffixes){
+                string prefix=InventoryPrefix(p,suffix.Word,uniquePrefix);if(prefix==null)continue;
+                string code=FindCode(prefix+"-"+suffix.Suffix);if(code==null||result.Any(row=>row.Code==code&&Math.Abs(row.AnchorY-suffix.Word.y)<80))continue;
+                result.Add(InventoryRow(p,code,Tom(code),suffix.Word.y));
             }
-            // A readable code can identify a row whose volume cell was missed or wrapped.
-            foreach(var suffix in p.Words.Where(w=>w.x>p.Ocr.width*.145&&w.x<p.Ocr.width*.4&&Regex.IsMatch(Compact(w.text),@"^ИЛ[ОO0]" )).OrderBy(w=>w.y)){
-                if(result.Any(row=>Math.Abs(row.AnchorY-suffix.y)<60))continue;
-                var prefix=p.Words.Where(w=>Math.Abs(w.x-suffix.x)<p.Ocr.width*.08&&suffix.y-w.y>=-8&&suffix.y-w.y<75&&Regex.IsMatch(Compact(w.text),@"^\d{3}-\d{2}-\d{4}-?$" )).OrderBy(w=>Math.Abs(w.y-suffix.y)).FirstOrDefault();
-                if(prefix==null)continue;string code=FindCode(prefix.text.TrimEnd('-')+"-"+suffix.text);if(code==null)continue;
-                result.Add(InventoryRow(p,code,Tom(code),(prefix.y+suffix.y)/2));
+            // A legible volume can recover a wrapped or missed code only when that code family is present on the page.
+            bool ilo=suffixes.Any(v=>v.Suffix.StartsWith("ИЛО")),tkr=suffixes.Any(v=>v.Suffix.StartsWith("ТКР"));
+            foreach(var word in p.Words.Where(w=>w.x<p.Ocr.width*.2).OrderBy(w=>w.y)){
+                string volume=Digits(word.text).Replace(',','.');
+                bool isTkr=tkr&&Regex.IsMatch(volume,@"^3\.[0-9]{1,2}(?:\.[0-9]{1,3}){0,3}$"),isIlo=ilo&&Regex.IsMatch(volume,@"^4\.[34]\.[0-9]{1,2}\.[0-9]{1,2}$");
+                if(!isTkr&&!isIlo)continue;string prefix=InventoryPrefix(p,word,uniquePrefix);if(prefix==null)continue;
+                string code=prefix+"-"+(isTkr?"ТКР":"ИЛО")+volume.Substring(2);var near=result.FirstOrDefault(row=>Math.Abs(row.AnchorY-word.y)<70);if(near!=null){if(code.StartsWith(near.Code+".",StringComparison.Ordinal)){near.Code=code;near.Tom=volume;}continue;}result.Add(InventoryRow(p,code,volume,word.y));
             }
+            foreach(var row in DocumentIdentity.InventoryRows(p.Ocr,p.Image))if(!result.Any(r=>Math.Abs(r.AnchorY-row.Y)<Math.Max(70,p.Ocr.height*.028)))result.Add(InventoryRow(p,CodeValue(row.Code),row.Volume,row.Y));
             return result.OrderBy(row=>row.AnchorY).ToList();
         }
         static InventoryEntry InventoryRow(Photo p,string code,string volume,double anchor){
@@ -194,9 +222,18 @@ namespace PhotoAudit {
         static int Distance(string a,string b){int[] prev=Enumerable.Range(0,b.Length+1).ToArray();for(int i=1;i<=a.Length;i++){int[] cur=new int[b.Length+1];cur[0]=i;for(int j=1;j<=b.Length;j++)cur[j]=Math.Min(Math.Min(cur[j-1]+1,prev[j]+1),prev[j-1]+(a[i-1]==b[j-1]?0:1));prev=cur;}return prev[b.Length];}
         static bool Different(string a,string b){a=BookClean(a);b=BookClean(b);if(a.Length<4||b.Length<4)return false;return (double)Distance(a,b)/Math.Max(a.Length,b.Length)>.28;}
         static void Add(AuditResult r,string level,string code,string topic,string detail,params Photo[] photos){var f=new Finding {Level=level,Code=code??"Без шифра",Topic=topic,Detail=detail};foreach(var p in photos.Where(p=>p!=null))f.Photos.Add(p.Id);r.Findings.Add(f);}
-        public static AuditResult Analyze(List<Photo> photos,string registry,Action<int,string> progress=null,CancellationToken cancel=default(CancellationToken),int workers=1){
+        public static AuditResult Analyze(List<Photo> photos,string registry,Action<int,string> progress=null,CancellationToken cancel=default(CancellationToken),int workers=1,ISet<int> inspectPages=null){
             var r=new AuditResult {Images=photos.Count,Photos=photos};
-            int processed=0;ParallelWork.For(photos.Count,workers,cancel,i=>{Parse(photos[i]);int n=Interlocked.Increment(ref processed);if(progress!=null)progress(89+(int)(8.0*n/Math.Max(1,photos.Count)),"Подписи и печати: "+n+" / "+photos.Count);});foreach(var p in photos.Where(p=>p.Kind=="Опись"))r.Inventory.AddRange(ParseInventory(p));foreach(var entry in r.Inventory)entry.Sections=FormAnalysis.InventorySections(entry.Photo,entry);
+            ParallelWork.For(photos.Count,workers,cancel,i=>Parse(photos[i],false));
+            foreach(var p in photos.Where(p=>p.Kind=="Опись"))r.Inventory.AddRange(ParseInventory(p));
+            var known=r.Inventory.Select(i=>i.Code).Concat(photos.Where(p=>p.Code!=null).Select(p=>p.Code)).Distinct().ToList();
+            foreach(var p in photos.Where(p=>p.Kind!="Опись")){
+                string match=DocumentIdentity.MatchPage(p.Ocr,known);if(match!=null&&(p.Code==null||DocumentIdentity.Key(p.Code)==DocumentIdentity.Key(match))){p.CodeHint=match;Parse(p,false);p.Code=match;p.Tom=Tom(match);}
+            }
+            int processed=0;var inspected=new bool[photos.Count];
+            ParallelWork.For(photos.Count,workers,cancel,i=>{var p=photos[i];if(inspectPages==null||inspectPages.Contains(p.Id)||p.Signatures==null||p.Seal==null||p.Kind=="Титул"&&p.Seal.Status=="Не применяется"){FormAnalysis.Inspect(p,null);inspected[i]=true;}int n=Interlocked.Increment(ref processed);if(progress!=null)progress(89+(int)(8.0*n/Math.Max(1,photos.Count)),"Правила и сохранённые данные: "+n+" / "+photos.Count);});
+            if(inspectPages!=null)for(int i=0;i<photos.Count;i++)if(inspected[i])inspectPages.Add(photos[i].Id);
+            foreach(var entry in r.Inventory)entry.Sections=FormAnalysis.InventorySections(entry.Photo,entry);
             // Continuation pages may omit the stage; propagate it only within the same explicit box number.
             var kindByBox=r.Inventory.Where(i=>i.Box.HasValue&&i.DocumentationKind!=null).GroupBy(i=>i.Box.Value).ToDictionary(g=>g.Key,g=>g.Select(i=>i.DocumentationKind).Distinct().ToList());
             foreach(var entry in r.Inventory){List<string> kinds;if(entry.DocumentationKind==null&&entry.Box.HasValue&&kindByBox.TryGetValue(entry.Box.Value,out kinds)&&kinds.Count==1)entry.DocumentationKind=kinds[0];}
@@ -208,8 +245,8 @@ namespace PhotoAudit {
             var parsedInventoryPages=new HashSet<int>(r.Inventory.Select(entry=>entry.Photo.Id));
             r.Inventory=r.Inventory.GroupBy(i=>i.Code).Select(g=>g.First()).ToList();r.InventoryPages=photos.Count(p=>p.Kind=="Опись");r.MainTitles=photos.Count(p=>p.Kind=="Титул");r.Iul=photos.Count(p=>p.Kind=="ИУЛ");r.InventoryOnly=photos.Count>0&&photos.All(p=>p.Kind=="Опись");
             foreach(var photo in photos.Where(p=>p.Kind=="Опись"&&!parsedInventoryPages.Contains(p.Id)))Add(r,"Проверить",null,"Строки описи не распознаны","Страница определена как опись, но строки с шифрами томов не извлечены. Откройте фотографию и проверьте качество распознавания.",photo);
-            var records=new Dictionary<string,List<SourceRow>>();
-            if(!string.IsNullOrWhiteSpace(registry))foreach(var row in XlsxReader.Read(registry,"Все загруженные файлы").Rows){string code=FindCode(XlsxReader.Text(row.Values[2]));if(code==null)continue;if(!records.ContainsKey(code))records[code]=new List<SourceRow>();records[code].Add(row);}
+            var records=new Dictionary<string,List<SourceRow>>();var fileMatcher=new DocumentIdentity.Matcher(r.Inventory.Select(i=>i.Code).Concat(photos.Where(p=>p.Code!=null).Select(p=>p.Code)));
+            if(!string.IsNullOrWhiteSpace(registry))foreach(var row in XlsxReader.Read(registry,"Все загруженные файлы").Rows){string code=fileMatcher.Match(XlsxReader.Text(row.Values[2]));if(code==null)continue;if(!records.ContainsKey(code))records[code]=new List<SourceRow>();records[code].Add(row);}
             var groups=photos.Where(p=>p.Code!=null&&p.Kind!="Опись").GroupBy(p=>p.Code).ToList();r.Volumes=r.InventoryOnly?r.Inventory.Count:groups.Count;
             if(!r.InventoryOnly)foreach(var inv in r.Inventory)if(!groups.Any(g=>g.Key==inv.Code))Add(r,"Проверить",inv.Code,"Нет фотографий тома","Том указан в распознанной описи, но его титулы и ИУЛ не найдены среди загруженных изображений.",inv.Photo);
             foreach(var group in groups){
@@ -391,18 +428,16 @@ namespace PhotoAudit {
             timing.Mark("Сохранение отчёта");ParallelWork.For(photos.Count,visualWorkers,cancel,i=>FormAnalysis.SaveSignatureCrops(photos[i],assets));
             SaveResult(result,root,registry);if(File.Exists(Path.Combine(root,"Ошибка.txt")))File.Delete(Path.Combine(root,"Ошибка.txt"));cancel.ThrowIfCancellationRequested();
             if(Path.GetFullPath(work).StartsWith(root+Path.DirectorySeparatorChar,StringComparison.OrdinalIgnoreCase)&&Path.GetFileName(work)==".ocr-work")Directory.Delete(work,true);
-            var stages=timing.Finish();File.WriteAllText(Path.Combine(root,"Время_проверки.json"),Json.Serialize(new {Version="1.6.0",Seconds=timing.Seconds,RequestedWorkers=requestedWorkers,ImageWorkers=imageWorkers,OcrWorkers=ocrWorkers,VisualWorkers=visualWorkers,AdaptiveNumeric=adaptiveNumeric,StableFieldsWithoutExtraCrops=skippedNumeric.Sum(fields=>fields.Count),Stages=stages}),new UTF8Encoding(false));
+            var stages=timing.Finish();File.WriteAllText(Path.Combine(root,"Время_проверки.json"),Json.Serialize(new {Version="1.7.0",Seconds=timing.Seconds,RequestedWorkers=requestedWorkers,ImageWorkers=imageWorkers,OcrWorkers=ocrWorkers,VisualWorkers=visualWorkers,AdaptiveNumeric=adaptiveNumeric,StableFieldsWithoutExtraCrops=skippedNumeric.Sum(fields=>fields.Count),Stages=stages}),new UTF8Encoding(false));
             progress(100,"Готово за "+TimeSpan.FromSeconds(timing.Seconds).ToString(@"mm\:ss")+": "+result.Images+" страниц / изображений, "+result.Findings.Count+" пунктов для просмотра");return result;
         }
         public static AuditResult Reanalyze(string root,string registry){
-            var prior=(Dictionary<string,object>)Json.DeserializeObject(File.ReadAllText(Path.Combine(root,"Результаты.json"),Encoding.UTF8));
-            var photos=new List<Photo>();
-            foreach(var item in (object[])prior["Photos"]){var record=(Dictionary<string,object>)item;int id=Convert.ToInt32(record["Id"]);string stem="p"+id.ToString("D4");var photo=Json.ConvertToType<Photo>(record);photo.Image=Path.Combine(root,"assets",stem+(File.Exists(Path.Combine(root,"assets",stem+"-processed.jpg"))?"-processed.jpg":".jpg"));photo.Ocr=Json.Deserialize<OcrPage>(File.ReadAllText(Path.Combine(root,"assets",stem+".json"),Encoding.UTF8));photos.Add(photo);}
+            var photos=Recheck.Load(root);
             var result=Analyze(photos,registry);foreach(var photo in photos)FormAnalysis.SaveSignatureCrops(photo,Path.Combine(root,"assets"));SaveResult(result,root,registry);return result;
         }
-        static void SaveResult(AuditResult result,string root,string registry){
+        internal static void SaveResult(AuditResult result,string root,string registry){
             result.Directory=root;result.Report=Path.Combine(root,"Отчет.html");WriteReport(result,registry);
-            File.WriteAllText(Path.Combine(root,"Результаты.json"),Json.Serialize(new {result.Images,result.Volumes,result.Iul,result.MainTitles,result.InventoryPages,result.InventoryOnly,result.CrcMatches,result.CrcCompared,result.RevisionMatches,result.RevisionCompared,Inventory=result.Inventory.Select(i=>new{i.Code,i.Tom,i.Book,i.Revision,i.Box,i.DocumentationKind,Photo=i.Photo.Id}),Findings=result.Findings,Photos=result.Photos.Select(p=>new{p.Id,p.Original,p.Kind,p.Code,p.Tom,p.Book,p.Chief,p.Organization,p.ManualInventory,p.CRC,p.Revision,p.Page,p.Pages,p.Ink,p.SignatureRows,p.RowsWithoutBlue,p.ProcessingNote,p.KindHint,p.CodeHint,p.OrganizationHint,p.Readings,p.Signatures,p.Sections,p.Seal,p.DetailWords,p.SectionText})}),new UTF8Encoding(false));
+            File.WriteAllText(Path.Combine(root,"Результаты.json"),Json.Serialize(new {result.Images,result.Volumes,result.Iul,result.MainTitles,result.InventoryPages,result.InventoryOnly,result.RecheckMode,result.RecheckPages,result.CrcMatches,result.CrcCompared,result.RevisionMatches,result.RevisionCompared,Inventory=result.Inventory.Select(i=>new{i.Code,i.Tom,i.Book,i.Revision,i.Box,i.DocumentationKind,Photo=i.Photo.Id}),Findings=result.Findings,Photos=result.Photos.Select(p=>new{p.Id,p.Original,ImageFile=Path.GetFileName(p.Image),p.Kind,p.Code,p.Tom,p.Book,p.Chief,p.Organization,p.ManualInventory,p.CRC,p.Revision,p.Page,p.Pages,p.Ink,p.SignatureRows,p.RowsWithoutBlue,p.ProcessingNote,p.KindHint,p.CodeHint,p.OrganizationHint,p.Readings,p.Signatures,p.Sections,p.Seal,p.DetailWords,p.SectionText})}),new UTF8Encoding(false));
         }
         static string H(object s){return HttpUtility.HtmlEncode(s==null?"":Convert.ToString(s,Inv));}
         static string ImageHtml(Photo p){return "<figure><a href='assets/p"+p.Id.ToString("D4")+".jpg' target='_blank'><img loading='lazy' src='assets/p"+p.Id.ToString("D4")+".jpg'></a><figcaption>"+H(p.Original)+"<br>"+H(p.Kind)+(p.ManualInventory?" (указана вручную)":"")+"; "+H(p.Code)+"</figcaption></figure>";}
@@ -416,6 +451,7 @@ namespace PhotoAudit {
         static void WriteReport(AuditResult r,string registry){
             var b=new StringBuilder("<!doctype html><html lang='ru'><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>Автопроверка документов</title><style>body{font:16px/1.5 Segoe UI,Arial;margin:0;background:#f3f5f7;color:#1c2e41}main{max-width:1260px;margin:32px auto;padding:0 24px}h1{font-size:30px}h2{font-size:22px}section,article{background:white;border:1px solid #dce3ea;border-radius:8px;padding:20px;margin:16px 0}small,.muted{color:#5a6b7c}.metrics{display:flex;gap:20px;flex-wrap:wrap}.metrics span{background:#eaf0f5;padding:12px 18px;border-radius:6px}table{border-collapse:collapse;width:100%;font-size:14px}th,td{padding:10px;text-align:left;border-bottom:1px solid #dce3ea;vertical-align:top}th{background:#234564;color:white}.proof{display:flex;gap:14px;flex-wrap:wrap}figure{margin:10px 0;width:280px}img{width:100%;border:1px solid #dce3ea}figcaption{font-size:12px;word-break:break-word}.level{font-weight:bold;color:#a03d22}button,select{font:inherit;padding:8px 12px}details summary{cursor:pointer;color:#234564}pre{white-space:pre-wrap;font-size:13px}a{color:#235e7a}@media print{body{background:white}button,select{display:none}}</style><main>");
             b.Append("<h1>Автопроверка документов</h1><p>Результат распознавания и предварительной сверки. Каждый пункт сопровождается исходными снимками.</p><div class='metrics'><span>Изображений: <b>"+r.Images+"</b></span><span>Томов распознано: <b>"+r.Volumes+"</b></span><span>ИУЛ: <b>"+r.Iul+"</b></span><span><a href='#inventory-photos'>Фотографий описи: <b>"+r.InventoryPages+"</b></a></span><span>Пунктов для просмотра: <b>"+r.Findings.Count+"</b></span></div>");
+            if(r.RecheckMode!=null)b.Append("<section><h2>Повторная проверка</h2><p>"+H(r.RecheckMode)+". Повторное OCR: "+(r.RecheckPages.Count==0?"не выполнялось":H(string.Join(", ",r.RecheckPages)))+". Остальные страницы — по сохранённому OCR. Исходные PDF и фотографии не открывались.</p></section>");
             if(r.InventoryOnly)b.Append("<section><h2>Режим: только опись</h2><p>Опись распознана для заполнения таблицы Excel. Титулы, ИУЛ, подписи, печати и CRC32 по документам не проверялись.</p><p>Файл проверки: "+H(registry)+"</p></section>");
             else b.Append("<section><h2>Результат сверки</h2><p>CRC32: совпало "+r.CrcMatches+" из "+r.CrcCompared+" распознанных значений на листах ИУЛ. Изменения: совпало "+r.RevisionMatches+" из "+r.RevisionCompared+" сравнений с описью.</p><p class='muted'>Контрольная сумма сравнивается по напечатанному тексту и реестру, без пересчёта исходных PDF. Графа «Листов» не используется для замечаний или вывода о комплектности ИУЛ. Подписные строки анализируются отдельно: цветные и чёрные штрихи, границы ячеек и удаление печатного текста. Круглая печать определяется по контуру. Результат является визуальным признаком, не подтверждением подлинности; пересечение печати и подписи требует просмотра.</p><p>Реестр: "+H(registry)+"</p></section>");
             b.Append("<section id='inventory-photos'><h2>Фотографии описи</h2><p>Распознано страниц описи: "+r.InventoryPages+". Строк в сводной описи: "+r.Inventory.Count+". Продолжения таблицы распознаются по заголовкам граф.</p><div class='proof'>");

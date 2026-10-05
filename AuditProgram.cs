@@ -21,6 +21,7 @@ namespace PhotoAudit {
                 if(args.Length>=4&&args[0]=="--render-pdf"){NativeWindows.RenderPdf(args[1],Path.GetFullPath(args[2]),int.Parse(args[3]),ParallelWork.Workers(args.Length>4?int.Parse(args[4]):0,512),s=>Console.WriteLine(s),CancellationToken.None);return 0;}
                 if(args.Length>=3&&args[0]=="--ocr"){NativeWindows.Recognize(args[1],args[2],ParallelWork.Workers(args.Length>3?int.Parse(args[3]):0,192),args.Length>4&&args[4]=="1",s=>Console.WriteLine(s),CancellationToken.None);return 0;}
                 if(args.Length>=4&&args[0]=="--compare"){QualityBenchmark.Compare(args[1],args[2],args[3],args.Length>4?args[4]:null);return 0;}
+                if(args.Length>=6&&args[0]=="--recheck"){Recheck.Run(args[1],args[3]=="-"?null:args[3],args[2],args[5]=="-"?new List<int>():args[5].Split(',').Select(int.Parse).ToList(),args[4]=="ocr",(p,t)=>Console.WriteLine(p+"% "+t),CancellationToken.None);return 0;}
                 if(args.Length>=3&&args[0]=="--reanalyze"){AuditEngine.Reanalyze(Path.GetFullPath(args[1]),args[2]=="-"?null:args[2]);return 0;}
                 if(args.Length>=3&&args[0]=="--batch"&&(args.Length>=4||inventoryInputs.Count>0)){
                     string dest=Path.GetFullPath(args[1]);Directory.CreateDirectory(dest);
@@ -50,7 +51,7 @@ namespace PhotoAudit {
             grid.Controls.Add(new Label{Text="Загрузите документы для проверки или только опись и Excel для заполнения таблицы. Программа распознает текст и покажет возможные расхождения.",Dock=DockStyle.Fill,ForeColor=Color.FromArgb(73,91,108)},0,1);
             var actions=new FlowLayoutPanel{Dock=DockStyle.Fill,WrapContents=false};actions.Controls.Add(Edit("Добавить файлы",215,(s,e)=>Choose()));actions.Controls.Add(Edit("Добавить папку",150,(s,e)=>Folder()));actions.Controls.Add(Edit("Удалить",100,(s,e)=>{foreach(int i in list.SelectedIndices.Cast<int>().OrderByDescending(x=>x).ToList()){inventoryInputs.Remove(inputs[i]);inputs.RemoveAt(i);}RefreshInputs();}));actions.Controls.Add(Edit("Сравнить версии",170,(s,e)=>Benchmark()));actions.Controls.Add(new Label{Text="Потоки:",AutoSize=true,Padding=new Padding(8,7,0,0)});parallel.Items.AddRange(new object[]{"Авто","1","2","3","4","6","8"});parallel.SelectedIndex=0;parallel.Margin=new Padding(3,3,0,0);actions.Controls.Add(parallel);grid.Controls.Add(actions,0,2);
             list.Dock=DockStyle.Fill;list.SelectionMode=SelectionMode.MultiExtended;list.HorizontalScrollbar=true;grid.Controls.Add(list,0,3);
-            var inventoryActions=new FlowLayoutPanel{Dock=DockStyle.Fill,WrapContents=false};inventoryActions.Controls.Add(Edit("Указать файл описи…",195,(s,e)=>ChooseInventory()));inventoryActions.Controls.Add(Edit("Снять отметку описи",195,(s,e)=>{foreach(int i in list.SelectedIndices.Cast<int>())inventoryInputs.Remove(inputs[i]);RefreshInputs();}));inventoryActions.Controls.Add(adaptive);grid.Controls.Add(inventoryActions,0,4);
+            var inventoryActions=new FlowLayoutPanel{Dock=DockStyle.Fill,WrapContents=false};inventoryActions.Controls.Add(Edit("Указать файл описи…",195,(s,e)=>ChooseInventory()));inventoryActions.Controls.Add(Edit("Снять отметку описи",195,(s,e)=>{foreach(int i in list.SelectedIndices.Cast<int>())inventoryInputs.Remove(inputs[i]);RefreshInputs();}));inventoryActions.Controls.Add(adaptive);inventoryActions.Controls.Add(Edit("Повторная проверка…",180,(s,e)=>Repeat()));grid.Controls.Add(inventoryActions,0,4);
             inventoryStatus.Text="Перед основной проверкой будет показано количество страниц описи.";inventoryStatus.Dock=DockStyle.Fill;inventoryStatus.ForeColor=Color.FromArgb(35,69,100);grid.Controls.Add(inventoryStatus,0,5);
             grid.Controls.Add(PathRow("Файл проверки:",registry,(s,e)=>{using(var d=new OpenFileDialog{Filter="Книги Excel|*.xlsx",Title="Таблица для заполнения и сверки CRC32"})if(d.ShowDialog(this)==DialogResult.OK)registry.Text=d.FileName;}),0,6);
             output.Text=AppDomain.CurrentDomain.BaseDirectory;grid.Controls.Add(PathRow("Папка отчётов:",output,(s,e)=>{using(var d=new FolderBrowserDialog{Description="Папка для нового отчёта и изображений"})if(d.ShowDialog(this)==DialogResult.OK)output.Text=d.SelectedPath;}),0,7);
@@ -87,6 +88,19 @@ namespace PhotoAudit {
             if(lastResult==null)return;
             if(ask&&MessageBox.Show(this,"Проверка завершена. Заполнить сводную таблицу?","Проверка завершена",MessageBoxButtons.YesNo,MessageBoxIcon.Question)!=DialogResult.Yes)return;
             using(var dialog=new SummaryFillForm(lastResult,lastRegistry,completedAt))if(dialog.ShowDialog(this)==DialogResult.OK)Append("Сводная таблица: "+dialog.SavedPath);
+        }
+        void Repeat(){
+            using(var dialog=new RecheckForm(report)){
+                if(dialog.ShowDialog(this)!=DialogResult.OK)return;
+                if(registry.Text!=""&&!File.Exists(registry.Text)){MessageBox.Show(this,"Файл проверки Excel не найден.",Text);return;}
+                string dest;try{dest=Path.Combine(Path.GetFullPath(output.Text),"Повторная_"+DateTime.Now.ToString("yyyyMMdd_HHmmss_fff"));}catch(Exception ex){MessageBox.Show(this,ex.Message,Text);return;}
+                string source=dialog.SourceRoot,reference=registry.Text;var ids=dialog.SelectedPages;bool repeat=dialog.RepeatOcr;int workers=parallel.SelectedIndex==0?0:int.Parse(Convert.ToString(parallel.SelectedItem));token=new CancellationTokenSource();SetBusy(true);bar.Value=0;Append("Повторная проверка сохранённого отчёта: "+source);
+                var worker=new Thread(()=>{try{
+                    var result=Recheck.Run(source,reference,dest,ids,repeat,(p,s)=>Ui(()=>{bar.Value=Math.Min(100,p);Append(s);}),token.Token,workers);var finished=DateTime.Now;
+                    Ui(()=>{report=result.Report;lastResult=result;completedAt=finished;lastRegistry=reference;Append("Отчёт: "+report);inventoryStatus.Text="Страниц описи: "+result.InventoryPages;counts.Text="Фото: "+result.Images+"; пунктов: "+result.Findings.Count;SetBusy(false);token.Dispose();token=null;FillSummary(true);});
+                }catch(OperationCanceledException){Ui(()=>{Append("Повторная проверка отменена. Исходный отчёт сохранён.");SetBusy(false);token.Dispose();token=null;});}
+                catch(Exception ex){ex=ParallelWork.StorageError(ex,dest);string error=AuditProgram.LogError(ex,dest);Ui(()=>{Append("Ошибка: "+ex.Message+"\nЖурнал: "+error);SetBusy(false);token.Dispose();token=null;MessageBox.Show(this,ex.Message,"Не удалось повторить проверку",MessageBoxButtons.OK,MessageBoxIcon.Error);});}});worker.IsBackground=true;worker.SetApartmentState(ApartmentState.STA);worker.Start();
+            }
         }
         void Start(){
             if(inputs.Count==0){MessageBox.Show(this,"Добавьте фотографии, PDF или ZIP.",Text);return;}
