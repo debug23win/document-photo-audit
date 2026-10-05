@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.IO;
 using System.Linq;
 using System.Runtime.ExceptionServices;
 using System.Runtime.InteropServices;
@@ -23,6 +24,21 @@ namespace PhotoAudit {
         public static int Workers(int requested,int memoryPerWorker){return Limit(requested,Environment.ProcessorCount,AvailableMemory(),memoryPerWorker);}
         public static int ImageBudget(int width,int height){return Math.Max(128,(int)Math.Ceiling((long)width*height*24.0/(1024*1024))+64);}
         public static void RelieveMemory(){if(AvailableMemory()<768UL*1024*1024)GC.Collect(2,GCCollectionMode.Forced,false);}
+        public static void CheckFreeSpace(long available,long required,string drive){
+            long reserve=64L*1024*1024;
+            if(available<required+reserve)throw new IOException("Недостаточно свободного места на диске "+drive+". Свободно: "+(available/1048576L)+" МБ; требуется не менее "+((required+reserve+1048575)/1048576L)+" МБ. Освободите место или выберите папку отчётов на другом диске и запустите обработку снова.");
+        }
+        public static void CheckDiskSpace(string path,long required=0){
+            var drive=SpaceDrive(path);if(drive!=null)CheckFreeSpace(drive.AvailableFreeSpace,required,drive.Name);
+        }
+        static DriveInfo SpaceDrive(string path){try{var drive=new DriveInfo(Path.GetPathRoot(Path.GetFullPath(path)));return drive.IsReady?drive:null;}catch(ArgumentException){return null;}catch(IOException){return null;}}
+        public static Exception StorageError(Exception error,string path){
+            if(error is OperationCanceledException||string.IsNullOrWhiteSpace(path))return error;
+            if(!(error is IOException)&&!(error is ExternalException))return error;
+            try{CheckDiskSpace(path);}catch(IOException ex){return new IOException(ex.Message,error);}catch(UnauthorizedAccessException){}
+            return error;
+        }
+        public static void SaveImage(string path,Action save){CheckDiskSpace(path);try{save();}catch(ExternalException ex){throw StorageError(ex,path);}}
         public static void For(int count,int workers,CancellationToken cancel,Action<int> action) {
             cancel.ThrowIfCancellationRequested();if(count==0)return;
             if(workers<=1){for(int i=0;i<count;i++){cancel.ThrowIfCancellationRequested();action(i);}return;}

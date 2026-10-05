@@ -45,9 +45,10 @@ namespace PhotoAudit {
             var file=StorageFile.GetFileFromPathAsync(Path.GetFullPath(input)).AsTask(cancel).GetAwaiter().GetResult();PdfDocument document;
             try{document=PdfDocument.LoadFromFileAsync(file).AsTask(cancel).GetAwaiter().GetResult();}catch(Exception ex){throw new InvalidDataException("Не удалось открыть PDF. Проверьте целостность файла и отсутствие защиты паролем.",ex);}
             if(document.IsPasswordProtected)throw new InvalidDataException("PDF защищён паролем. Сохраните доступную для чтения копию и загрузите её.");
-            int count=(int)document.PageCount;if(count>maxPages)throw new InvalidDataException("Слишком много страниц PDF: "+count+". Осталось допустимых страниц: "+maxPages);Directory.CreateDirectory(output);int done=0;
+            int count=(int)document.PageCount;if(count>maxPages)throw new InvalidDataException("Слишком много страниц PDF: "+count+". Осталось допустимых страниц: "+maxPages);ParallelWork.CheckDiskSpace(output,count*8L*1024*1024);Directory.CreateDirectory(output);int done=0;
             ParallelWork.For(count,workers,cancel,i=>{
                 using(var page=document.GetPage((uint)i)){
+                    ParallelWork.CheckDiskSpace(output);
                     string target=Path.Combine(output,"page-"+(i+1).ToString("D4")+".png");File.WriteAllBytes(target,new byte[0]);var imageFile=StorageFile.GetFileFromPathAsync(target).AsTask(cancel).GetAwaiter().GetResult();
                     using(var stream=imageFile.OpenAsync(FileAccessMode.ReadWrite).AsTask(cancel).GetAwaiter().GetResult()){
                         double scale=Math.Min(3.125,5000.0/Math.Max(page.Size.Width,page.Size.Height));var options=new PdfPageRenderOptions{DestinationWidth=(uint)Math.Max(1,Math.Round(page.Size.Width*scale)),DestinationHeight=(uint)Math.Max(1,Math.Round(page.Size.Height*scale))};

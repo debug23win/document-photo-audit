@@ -14,12 +14,15 @@ namespace PhotoAudit {
     public sealed class SummaryRow {
         public SourceRow Source;
         public string Code;
+        public InventoryEntry Inventory;
     }
     public sealed class SummaryPlan {
         public string Source;
         public AuditResult Result;
+        public bool IncludeInventoryMetadata;
         public readonly List<SummaryRow> Rows=new List<SummaryRow>();
         public readonly List<string> Skipped=new List<string>();
+        public readonly List<string> MetadataNotes=new List<string>();
         public int Documents {get{return Rows.Select(r=>r.Code).Distinct().Count();}}
     }
     public static class SummaryWriter {
@@ -28,12 +31,12 @@ namespace PhotoAudit {
         static readonly XNamespace R="http://schemas.openxmlformats.org/officeDocument/2006/relationships";
         static readonly CultureInfo Inv=CultureInfo.InvariantCulture;
         public static bool ValidSurname(string name){return Regex.IsMatch((name??"").Trim(),@"^[\p{L}][\p{L} '\-]{0,79}$");}
-        public static SummaryPlan Preview(AuditResult result,string source){
+        public static SummaryPlan Preview(AuditResult result,string source,bool includeInventoryMetadata=true){
             if(result==null)throw new ArgumentNullException("result");
-            var plan=new SummaryPlan{Source=Path.GetFullPath(source),Result=result};
+            var plan=new SummaryPlan{Source=Path.GetFullPath(source),Result=result,IncludeInventoryMetadata=result.InventoryOnly&&includeInventoryMetadata};
             var book=XlsxReader.Read(plan.Source,MainSheet);
-            var groups=book.Rows.Select(row=>new SummaryRow{Source=row,Code=AuditEngine.DocumentCode(XlsxReader.Text(row.Values[2]))}).Where(row=>row.Code!=null).GroupBy(row=>row.Code).ToDictionary(g=>g.Key,g=>g.ToList());
-            var codes=result.Photos.Where(p=>p.Kind!="Опись"&&p.Code!=null).Select(p=>p.Code).Concat(result.Findings.Select(f=>AuditEngine.DocumentCode(f.Code))).Where(c=>c!=null).Distinct().OrderBy(c=>c,StringComparer.Ordinal).ToList();
+            var groups=book.Rows.Select(row=>new SummaryRow{Source=row,Code=AuditEngine.DocumentCode(XlsxReader.Text(row.Values[2]))}).Where(row=>row.Code!=null&&(!result.InventoryOnly||BaseVolumeFile(row))).GroupBy(row=>row.Code).ToDictionary(g=>g.Key,g=>g.ToList());
+            var codes=(result.InventoryOnly?result.Inventory.Select(i=>i.Code):result.Photos.Where(p=>p.Kind!="Опись"&&p.Code!=null).Select(p=>p.Code).Concat(result.Findings.Select(f=>AuditEngine.DocumentCode(f.Code)))).Where(c=>c!=null).Distinct().OrderBy(c=>c,StringComparer.Ordinal).ToList();
             foreach(var code in codes){
                 List<SummaryRow> candidates;
                 if(!groups.TryGetValue(code,out candidates)){plan.Skipped.Add(code+": строка в Excel не найдена.");continue;}
@@ -41,12 +44,27 @@ namespace PhotoAudit {
                 if(versions.Count>1){
                     var read=result.Photos.Where(p=>p.Code==code&&p.Kind=="ИУЛ"&&!string.IsNullOrWhiteSpace(p.CRC)).Select(p=>XlsxReader.Normal(p.CRC)).Distinct().ToList();
                     var matches=versions.Where(v=>v!=""&&read.Contains(v)).ToList();
-                    if(matches.Count!=1){plan.Skipped.Add(code+": несколько версий с разными контрольными суммами; однозначное соответствие не найдено.");continue;}
+                    if(matches.Count!=1){plan.Skipped.Add(code+(result.InventoryOnly?": в Excel несколько версий с разными CRC32; по одной описи выбрать версию невозможно.":": несколько версий с разными контрольными суммами; однозначное соответствие не найдено."));continue;}
                     candidates=candidates.Where(row=>XlsxReader.Normal(row.Source.Values[7])==matches[0]).ToList();
                 }
-                plan.Rows.AddRange(candidates);
+                foreach(var item in candidates){item.Inventory=result.Inventory.FirstOrDefault(i=>i.Code==code);plan.Rows.Add(item);if(plan.IncludeInventoryMetadata)plan.MetadataNotes.AddRange(MetadataNotes(item).Select(note=>code+", строка "+item.Source.Row+": "+note));}
             }
             return plan;
+        }
+        static bool BaseVolumeFile(SummaryRow item){
+            string name=Regex.Replace(XlsxReader.Normal(item.Source.Values[2]),@"\s+","");name=Regex.Replace(name,@"\.(PDF|DOCX?|XLSX?|DWG|ZIP)$","");
+            int start=name.IndexOf(item.Code,StringComparison.Ordinal);if(start<0)return true;
+            string tail=name.Substring(start+item.Code.Length);
+            // Codes ending in -УЛ, -Л1, -О or .1 describe attached documents, not another CRC version of the volume.
+            return !Regex.IsMatch(tail,@"^(?:\.[А-ЯA-Z0-9]|-[А-ЯA-Z0-9])")||Regex.IsMatch(tail,@"^-ИЗМ[.0-9(]");
+        }
+        static IEnumerable<string> MetadataNotes(SummaryRow item){
+            var entry=item.Inventory;string kind=entry==null?null:entry.DocumentationKind;int? box=entry==null?null:entry.Box;
+            string oldKind=XlsxReader.Text(item.Source.Values[10]),oldBox=XlsxReader.Text(item.Source.Values[11]);double number;
+            if(string.IsNullOrWhiteSpace(kind))yield return "Вид документации по описи не распознан; графа K сохранена.";
+            else if(!string.IsNullOrWhiteSpace(oldKind)&&XlsxReader.Normal(oldKind)!=XlsxReader.Normal(kind))yield return "Вид документации: в Excel «"+oldKind+"», в описи «"+kind+"». Прежнее значение сохранено.";
+            if(!box.HasValue)yield return "Номер короба по описи не распознан; графа L сохранена.";
+            else if(!string.IsNullOrWhiteSpace(oldBox)&&(!double.TryParse(oldBox,NumberStyles.Float,Inv,out number)||number!=box.Value))yield return "Короб: в Excel «"+oldBox+"», в описи «"+box.Value+"». Прежнее значение сохранено.";
         }
         // Only confirmed findings set numeric flags. Every finding remains visible in notes.
         public static string Columns(AuditResult result,Finding f){
@@ -129,14 +147,15 @@ namespace PhotoAudit {
             surname=(surname??"").Trim();if(!ValidSurname(surname))throw new ArgumentException("Введите фамилию буквами (до 80 символов).");
             if(plan.Rows.Count==0)throw new InvalidOperationException("Нет однозначно сопоставленных строк для заполнения.");
             output=Path.GetFullPath(output);if(string.Equals(plan.Source,output,StringComparison.OrdinalIgnoreCase))throw new InvalidOperationException("Выберите новое имя файла: исходная таблица сохраняется без изменений.");
+            ParallelWork.CheckDiskSpace(output,new FileInfo(plan.Source).Length*2);
             // Re-read at save time so a table edited while the dialog was open is not overwritten by stale data.
-            plan=Preview(plan.Result,plan.Source);if(plan.Rows.Count==0)throw new InvalidOperationException("Строки таблицы изменились. Выберите файл заново.");
+            plan=Preview(plan.Result,plan.Source,plan.IncludeInventoryMetadata);if(plan.Rows.Count==0)throw new InvalidOperationException("Строки таблицы изменились. Выберите файл заново.");
             var result=plan.Result;confirmed=confirmed??new HashSet<int>();string temp=Path.Combine(Path.GetDirectoryName(output),".audit-summary-"+Guid.NewGuid().ToString("N")+".xlsx");
             try{using(var input=new FileStream(plan.Source,FileMode.Open,FileAccess.Read,FileShare.Read))using(var zip=new ZipArchive(input,ZipArchiveMode.Read)){
                 var book=Load(zip,"xl/workbook.xml");var rels=Load(zip,"xl/_rels/workbook.xml.rels");string path=SheetPath(book,rels);var sheet=Load(zip,path);var styles=Load(zip,"xl/styles.xml");
                 if(sheet.Root.Element(N+"sheetProtection")!=null)throw new InvalidDataException("Основной лист защищён. Снимите защиту в своей копии Excel перед заполнением.");
                 var rows=sheet.Root.Element(N+"sheetData").Elements(N+"row").ToDictionary(row=>(int)row.Attribute("r"));int format=DateFormat(styles);var styleCache=new Dictionary<string,int>();
-                if(result.Findings.Count>0)FitNoteColumn(sheet,20);
+                if(result.Findings.Count>0||result.InventoryOnly)FitNoteColumn(sheet,20);
                 if(result.Findings.Select((f,i)=>new {f,i}).Any(v=>confirmed.Contains(v.i)&&Columns(result,v.f).Contains("S")))FitNoteColumn(sheet,19);
                 var wp=book.Root.Element(N+"workbookPr");bool date1904=wp!=null&&new[]{"1","true"}.Contains((string)wp.Attribute("date1904"));double date=checkedAt.Date.ToOADate()-(date1904?1462:0);
                 foreach(var item in plan.Rows){
@@ -145,6 +164,15 @@ namespace PhotoAudit {
                     var reviewer=Cell(row,'I');var names=XlsxReader.Text(item.Source.Values[8]).Split(new[]{',',';','\n'},StringSplitOptions.RemoveEmptyEntries).Select(n=>n.Trim()).ToList();if(!names.Any(n=>string.Equals(n,surname,StringComparison.OrdinalIgnoreCase)))names.Add(surname);SetText(reviewer,string.Join(", ",names));
                     var dc=Cell(row,'J');int prior=(int?)dc.Attribute("s")??0;string styleKey=prior+"|date";int style;if(!styleCache.TryGetValue(styleKey,out style)){style=Style(styles,prior,format,false);styleCache[styleKey]=style;}dc.RemoveNodes();dc.SetAttributeValue("t",null);dc.SetAttributeValue("s",style);dc.Add(new XElement(N+"v",date.ToString(Inv)));
                     var notes=new List<string>();var inventory=new List<string>();var marks=new HashSet<char>();
+                    if(result.InventoryOnly){
+                        notes.Add("Сверено только по описи. Титулы, ИУЛ, подписи, печати и CRC32 по документам не проверялись.");
+                        if(plan.IncludeInventoryMetadata){
+                            var entry=item.Inventory;
+                            if(entry!=null&&!string.IsNullOrWhiteSpace(entry.DocumentationKind)&&string.IsNullOrWhiteSpace(XlsxReader.Text(item.Source.Values[10])))SetText(Cell(row,'K'),entry.DocumentationKind);
+                            if(entry!=null&&entry.Box.HasValue&&string.IsNullOrWhiteSpace(XlsxReader.Text(item.Source.Values[11]))){var box=Cell(row,'L');box.RemoveNodes();box.SetAttributeValue("t",null);box.Add(new XElement(N+"v",entry.Box.Value));}
+                            notes.AddRange(MetadataNotes(item));
+                        }
+                    }
                     foreach(var f in applicable){
                         string level=confirmed.Contains(f.Index)?"Расхождение":f.Finding.Level=="Расхождение"?"Проверить":f.Finding.Level;
                         string note=level+": "+f.Finding.Topic+". "+(f.Finding.Detail??"").Replace("\r","").Replace("\n"," ");if(AuditEngine.DocumentCode(f.Finding.Code)==null)note="Общая проверка — "+note;

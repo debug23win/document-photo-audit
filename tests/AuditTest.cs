@@ -24,6 +24,18 @@ class AuditTest {
         var inventory=new Photo{Id=3,Original="single-inventory.jpg",Image=file,Ocr=InventoryPage("Опись","ИЛО3.7.1"),CodeHint="123-45-6789-ИЛО4.1.1"};
         r=AuditEngine.Analyze(new List<Photo>{inventory},null);
         if(inventory.Kind!="Опись"||inventory.Code!=null||r.InventoryPages!=1||r.Inventory.Count!=1||r.Inventory[0].Tom!="4.3.7.1"||r.Inventory[0].Revision!=2)throw new Exception("Single-row inventory with unread volume cell was missed or assigned a document hint");
+        if(!r.InventoryOnly||r.Volumes!=1||r.Findings.Any(f=>f.Topic=="Нет фотографий тома"))throw new Exception("Inventory-only must not invent missing document findings");
+        inventory.Ocr=InventoryPage("Проектная документация","ИЛО3.7.1");inventory.Ocr.lines[1].words.Add(W("Короба",1150,300));inventory.Ocr.lines[1].words.Add(W("22",1150,600));
+        var continuation=new Photo{Id=4,Original="continuation.jpg",Image=file,Ocr=InventoryPage("","ИЛО4.1.2")};continuation.Ocr.lines[1].words.Add(W("Короба",1150,300));continuation.Ocr.lines[1].words.Add(W("22",1150,600));
+        r=AuditEngine.Analyze(new List<Photo>{inventory,continuation},null);
+        if(r.Inventory.Count!=2||r.Inventory.Any(i=>i.Box!=22||i.DocumentationKind!="ПД")||r.Inventory.Any(i=>i.Revision!=2))throw new Exception("Box column/stage propagation failed or confused with revision");
+        continuation.Ocr.lines[1].words.Last().text="23";r=AuditEngine.Analyze(new List<Photo>{inventory,continuation},null);
+        if(r.Inventory.First(i=>i.Code.EndsWith("4.1.2")).DocumentationKind!=null)throw new Exception("Stage must not propagate across unrelated boxes");
+        continuation.Ocr=InventoryPage("Проектная документация","ИЛО3.7.1");continuation.Ocr.lines[1].words.Add(W("Короба",1150,300));continuation.Ocr.lines[1].words.Add(W("23",1150,600));r=AuditEngine.Analyze(new List<Photo>{inventory,continuation},null);
+        if(r.Inventory.Count!=1||r.Inventory[0].Box!=null||!r.Findings.Any(f=>f.Topic=="Разные номера короба в описи"))throw new Exception("Conflicting box assignments must remain visible and unfilled");
+        r=AuditEngine.Analyze(new List<Photo>{inventory,b},null);if(r.InventoryOnly)throw new Exception("Mixed inputs must retain full audit mode");
+        if(AuditEngine.InventoryDocumentationKind(Page("Инженерные изыскания\nШифр тома"))!="ИИ"||AuditEngine.InventoryDocumentationKind(Page("Документация по планировке территории\nШифр тома"))!="ДПТ"||AuditEngine.InventoryDocumentationKind(Page("Проектная документация\nИнженерные изыскания\nШифр тома"))!=null)throw new Exception("Documentation stage recognition must refuse ambiguous headings");
+        if(AuditEngine.InventoryDocumentationKind(Page("Опись проектной и сметной документации\nСтадия: Инженерные изыскания\nШифр тома"))!="ИИ")throw new Exception("Explicit stage must take precedence over a generic inventory heading");
         inventory.Ocr=InventoryPage("","ИЛО4Л.1О");inventory.Ocr.lines[1].words.Add(W("4.4.1.",150,600));inventory.Ocr.lines[1].words.Add(W("О",150,640));
         r=AuditEngine.Analyze(new List<Photo>{inventory},null);
         if(inventory.Kind!="Опись"||r.Inventory.Count!=1||r.Inventory[0].Tom!="4.4.1.10")throw new Exception("Continuation inventory with a wrapped volume was missed");
